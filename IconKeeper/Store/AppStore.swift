@@ -92,8 +92,7 @@ final class AppStore {
 
         NotificationManager.shared.isEnabled = notificationsEnabled
         monitor.updateInterval(monitoringInterval)
-        monitor.onCheck = { [weak self] id in self?.verifyAndReapplyIfNeeded(appID: id) }
-        monitor.onPeriodicSweep = { [weak self] in self?.sweepAll() }
+        monitor.onSweep = { [weak self] in self?.sweepAll() }
 
         recomputeAllStatuses()
     }
