@@ -22,8 +22,10 @@ private nonisolated let fsEventsLastEventIdKey = "fsEventsLastEventId"
 /// the same `onSweep` action in `AppStore`.
 @MainActor
 final class AppMonitor {
-    /// Called whenever the monitor wants every protected app re-verified.
-    var onSweep: (() -> Void)?
+    /// Called when something changed. `paths` are the specific changed file
+    /// paths to check; `fullScan == true` means re-verify everything (periodic
+    /// timer, or FSEvents signalled it dropped detail and we must rescan).
+    var onChange: (([String], Bool) -> Void)?
 
     private var watcher: FSEventsWatcher?
     private var timer: Timer?
@@ -74,9 +76,9 @@ final class AppMonitor {
         let newWatcher = FSEventsWatcher(
             paths: dirs,
             sinceWhen: loadLastEventId(),
-            onChange: {
+            onChange: { paths, fullScan in
                 // Delivered on the FSEvents queue; hop to the main actor.
-                Task { @MainActor [weak self] in self?.onSweep?() }
+                Task { @MainActor [weak self] in self?.onChange?(paths, fullScan) }
             },
             persistEventId: { id in
                 // No main-actor state touched here; UserDefaults is thread-safe.
@@ -99,7 +101,8 @@ final class AppMonitor {
     private func startTimer() {
         timer?.invalidate()
         let newTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            Task { @MainActor [weak self] in self?.onSweep?() }
+            // Periodic safety net: re-verify everything.
+            Task { @MainActor [weak self] in self?.onChange?([], true) }
         }
         newTimer.tolerance = interval * 0.2
         timer = newTimer

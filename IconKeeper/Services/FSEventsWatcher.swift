@@ -19,7 +19,8 @@ import Foundation
 nonisolated final class FSEventsWatcher {
     private let paths: [String]
     private let sinceWhen: FSEventStreamEventId
-    private let onChange: @Sendable () -> Void
+    /// `(changedPaths, needsFullScan)`.
+    private let onChange: @Sendable ([String], Bool) -> Void
     private let persistEventId: @Sendable (FSEventStreamEventId) -> Void
 
     private let queue = DispatchQueue(label: "com.iconkeeper.fsevents", qos: .utility)
@@ -28,7 +29,7 @@ nonisolated final class FSEventsWatcher {
     init(
         paths: [String],
         sinceWhen: FSEventStreamEventId,
-        onChange: @escaping @Sendable () -> Void,
+        onChange: @escaping @Sendable ([String], Bool) -> Void,
         persistEventId: @escaping @Sendable (FSEventStreamEventId) -> Void
     ) {
         self.paths = paths
@@ -50,10 +51,15 @@ nonisolated final class FSEventsWatcher {
             copyDescription: nil
         )
 
-        // NoDefer: deliver the first event promptly. WatchRoot: also tell us if
-        // a watched directory itself is moved or renamed.
+        // FileEvents: report specific file paths (so we can target the affected
+        // app instead of sweeping all). UseCFTypes: paths arrive as a CFArray of
+        // CFString. NoDefer: deliver promptly. WatchRoot: notice if a watched
+        // directory is itself moved.
         let flags = FSEventStreamCreateFlags(
-            kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot
+            kFSEventStreamCreateFlagUseCFTypes
+                | kFSEventStreamCreateFlagFileEvents
+                | kFSEventStreamCreateFlagNoDefer
+                | kFSEventStreamCreateFlagWatchRoot
         )
 
         guard let stream = FSEventStreamCreate(
@@ -80,15 +86,16 @@ nonisolated final class FSEventsWatcher {
     }
 
     /// Invoked by the C callback (on `queue`) after each coalesced batch.
-    fileprivate func handleBatch(latestEventId: FSEventStreamEventId) {
+    fileprivate func handleBatch(latestEventId: FSEventStreamEventId, paths: [String], fullScan: Bool) {
         if latestEventId != 0 { persistEventId(latestEventId) }
-        onChange()
+        onChange(paths, fullScan)
     }
 }
 
 /// Top-level (non-capturing) C callback. Recovers the watcher from the context
-/// `info` pointer and forwards the batch. We don't inspect paths/flags — any
-/// change in a watched container triggers a verify-and-reapply sweep upstream.
+/// `info` pointer, extracts the specific changed paths, and forwards them so the
+/// store can verify only the affected apps. If FSEvents signals it dropped
+/// detail (`MustScanSubDirs`), we ask for a full rescan instead.
 private nonisolated func fsEventsCallback(
     streamRef: ConstFSEventStreamRef,
     clientCallBackInfo: UnsafeMutableRawPointer?,
@@ -99,6 +106,19 @@ private nonisolated func fsEventsCallback(
 ) {
     guard let info = clientCallBackInfo else { return }
     let watcher = Unmanaged<FSEventsWatcher>.fromOpaque(info).takeUnretainedValue()
+
+    // With kFSEventStreamCreateFlagUseCFTypes, eventPaths is a CFArray<CFString>.
+    let cfPaths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
+    let paths = (cfPaths as NSArray) as? [String] ?? []
+
+    var fullScan = false
+    for i in 0..<numEvents {
+        if eventFlags[i] & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 {
+            fullScan = true
+            break
+        }
+    }
+
     let latest = numEvents > 0 ? eventIds[numEvents - 1] : 0
-    watcher.handleBatch(latestEventId: latest)
+    watcher.handleBatch(latestEventId: latest, paths: paths, fullScan: fullScan)
 }

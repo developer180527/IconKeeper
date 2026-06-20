@@ -30,6 +30,11 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
     /// Filename (inside the Backups directory) of the captured original icon.
     var originalIconBackupFilename: String?
 
+    /// Bookmark to the bundle, which resolves across user moves/renames on the
+    /// same volume. Used to relocate the app if `bundlePath` goes stale, so a
+    /// directory migration doesn't permanently orphan it.
+    var bookmark: Data?
+
     /// When `false`, IconKeeper leaves the app alone (no monitoring / reapply).
     var isProtectionEnabled: Bool
 
@@ -46,6 +51,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         displayName: String,
         customIconID: UUID? = nil,
         originalIconBackupFilename: String? = nil,
+        bookmark: Data? = nil,
         isProtectionEnabled: Bool = true,
         dateAdded: Date = Date(),
         lastAppliedDate: Date? = nil,
@@ -57,6 +63,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         self.displayName = displayName
         self.customIconID = customIconID
         self.originalIconBackupFilename = originalIconBackupFilename
+        self.bookmark = bookmark
         self.isProtectionEnabled = isProtectionEnabled
         self.dateAdded = dateAdded
         self.lastAppliedDate = lastAppliedDate

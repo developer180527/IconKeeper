@@ -8,7 +8,18 @@
 
 import SwiftUI
 
+/// Real process entry point. Splits the headless `--agent` path (run by the
+/// launchd LaunchAgent) from the normal GUI launch before SwiftUI starts.
 @main
+struct IconKeeperMain {
+    static func main() {
+        if CommandLine.arguments.dropFirst().contains("--agent") {
+            AgentRunner.runAndExit() // never returns
+        }
+        IconKeeperApp.main()
+    }
+}
+
 struct IconKeeperApp: App {
     @State private var store = AppStore()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

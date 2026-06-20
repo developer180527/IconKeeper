@@ -40,6 +40,10 @@ struct DashboardView: View {
                         store.reapplyAll()
                     }
                     .disabled(store.apps.isEmpty)
+                    Button("Refresh Dock Icons", systemImage: "dock.rectangle") {
+                        store.forceDockRefresh()
+                    }
+                    .help("Relaunch the Dock to clear stubborn icon caches.")
                     Divider()
                     Button("Export Configuration…", systemImage: "square.and.arrow.up") {
                         store.exportConfiguration()

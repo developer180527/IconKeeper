@@ -44,6 +44,13 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Background protection") {
+                Toggle("Protect even when IconKeeper is closed", isOn: $store.backgroundProtectionEnabled)
+                Text("Installs a lightweight launchd agent that reapplies your icons after updates — at login and every few minutes — even if the app isn't running. There's no always-on process: the system briefly wakes the agent, it fixes any drift, and exits.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("About") {
                 LabeledContent("Protected apps", value: "\(store.apps.count)")
                 LabeledContent("Library icons", value: "\(store.library.count)")

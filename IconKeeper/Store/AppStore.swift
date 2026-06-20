@@ -61,6 +61,23 @@ final class AppStore {
         }
     }
 
+    /// When on, a launchd LaunchAgent keeps protecting apps even while the GUI
+    /// is closed (see `LaunchAgentManager`).
+    var backgroundProtectionEnabled: Bool {
+        didSet {
+            do {
+                if backgroundProtectionEnabled {
+                    try LaunchAgentManager.enable()
+                } else {
+                    LaunchAgentManager.disable()
+                }
+            } catch {
+                lastErrorMessage = "Couldn't update background protection: \(error.localizedDescription)"
+                backgroundProtectionEnabled = LaunchAgentManager.isEnabled
+            }
+        }
+    }
+
     // MARK: - Private
 
     private let persistence = PersistenceController()
@@ -84,6 +101,7 @@ final class AppStore {
         notificationsEnabled = (defaults.object(forKey: Keys.notifications) as? Bool) ?? true
         autoReapplyEnabled = (defaults.object(forKey: Keys.autoReapply) as? Bool) ?? true
         launchAtLogin = LoginItemManager.isEnabled
+        backgroundProtectionEnabled = LaunchAgentManager.isEnabled
 
         let state = persistence.load()
         apps = state.apps
@@ -92,7 +110,9 @@ final class AppStore {
 
         NotificationManager.shared.isEnabled = notificationsEnabled
         monitor.updateInterval(monitoringInterval)
-        monitor.onSweep = { [weak self] in self?.sweepAll() }
+        monitor.onChange = { [weak self] paths, fullScan in
+            if fullScan { self?.sweepAll() } else { self?.verifyChangedPaths(paths) }
+        }
 
         recomputeAllStatuses()
     }
@@ -101,9 +121,26 @@ final class AppStore {
     func startMonitoring() {
         guard !hasStartedMonitoring else { return }
         hasStartedMonitoring = true
+
+        // Pull in anything the background agent reapplied while we were closed,
+        // and make sure its plist still points at this executable.
+        drainAgentEvents()
+        LaunchAgentManager.refresh()
+
         monitor.start(apps: apps)
         // Catch any drift that happened while IconKeeper wasn't running.
         sweepAll()
+    }
+
+    /// Merges background-agent activity into the main log and clears the hand-off.
+    private func drainAgentEvents() {
+        let pending = persistence.loadAgentEvents()
+        guard !pending.isEmpty else { return }
+        activity.insert(contentsOf: pending, at: 0)
+        activity.sort { $0.date > $1.date }
+        if activity.count > 500 { activity.removeLast(activity.count - 500) }
+        persistence.clearAgentEvents()
+        persist()
     }
 
     // MARK: - Registration
@@ -145,6 +182,7 @@ final class AppStore {
             displayName: IconManager.displayName(of: standardized),
             customIconID: item.id,
             originalIconBackupFilename: backupFilename,
+            bookmark: try? standardized.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
             isProtectionEnabled: true,
             lastAppliedDate: Date()
         )
@@ -167,7 +205,7 @@ final class AppStore {
             runtimeStatus[appID] = .failed("No icon assigned")
             return
         }
-        guard app.bundleExists else {
+        guard let bundleURL = resolveURL(for: appID) else {
             runtimeStatus[appID] = .missing
             return
         }
@@ -175,7 +213,7 @@ final class AppStore {
         runtimeStatus[appID] = .applying
         let iconURL = persistence.libraryFileURL(for: item.filename)
         do {
-            try IconManager.applyIcon(at: iconURL, to: app.bundleURL)
+            try IconManager.applyIcon(at: iconURL, to: bundleURL)
             apps[index].lastAppliedDate = Date()
             if automatic {
                 apps[index].reapplyCount += 1
@@ -273,24 +311,93 @@ final class AppStore {
             runtimeStatus[appID] = .paused
             return
         }
-        guard app.bundleExists else {
+        guard let bundleURL = resolveURL(for: appID) else {
             runtimeStatus[appID] = .missing
             return
         }
-        guard app.customIconID != nil else { return }
+        guard let iconID = app.customIconID else { return }
 
-        if IconManager.isCustomIconApplied(at: app.bundleURL) {
+        // Verify our *specific* asset is applied — not merely that some custom
+        // icon exists (which a user/third-party override would also satisfy).
+        let applied: Bool
+        if let expected = libraryIconImage(iconID) {
+            applied = IconManager.isExpectedIconApplied(expected: expected, at: bundleURL)
+        } else {
+            applied = IconManager.isCustomIconApplied(at: bundleURL)
+        }
+
+        if applied {
             runtimeStatus[appID] = .protected
         } else {
-            // Drift detected.
-            log(.drifted, app: app.displayName, message: "Custom icon was reset (likely an update).")
+            log(.drifted, app: app.displayName, message: "Icon no longer matches your choice (update or external change).")
+            runtimeStatus[appID] = .drifted
             if autoReapplyEnabled {
-                runtimeStatus[appID] = .drifted
                 reapply(appID, automatic: true)
-            } else {
-                runtimeStatus[appID] = .drifted
             }
         }
+    }
+
+    /// Resolves an app's current location, healing a stale path via its bookmark
+    /// (survives user moves/renames) or LaunchServices. Returns `nil` if the app
+    /// genuinely can't be found.
+    func resolveURL(for appID: UUID) -> URL? {
+        guard let index = apps.firstIndex(where: { $0.id == appID }) else { return nil }
+
+        let currentPath = apps[index].bundlePath
+        if FileManager.default.fileExists(atPath: currentPath) {
+            return URL(fileURLWithPath: currentPath)
+        }
+
+        // The bundle moved/renamed — try the bookmark first.
+        if let data = apps[index].bookmark {
+            var stale = false
+            if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
+               FileManager.default.fileExists(atPath: url.path) {
+                relocate(index: index, to: url, refreshBookmark: stale)
+                return url
+            }
+        }
+
+        // Fall back to LaunchServices by bundle identifier.
+        if let bid = apps[index].bundleIdentifier,
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid),
+           FileManager.default.fileExists(atPath: url.path) {
+            relocate(index: index, to: url, refreshBookmark: true)
+            return url
+        }
+
+        return nil
+    }
+
+    private func relocate(index: Int, to url: URL, refreshBookmark: Bool) {
+        let newPath = url.standardizedFileURL.path
+        let moved = apps[index].bundlePath != newPath
+        apps[index].bundlePath = newPath
+        if refreshBookmark || apps[index].bookmark == nil {
+            apps[index].bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        }
+        persist()
+        if moved { monitor.syncWatchers(for: apps) }
+    }
+
+    /// Verifies only the apps whose bundles are touched by the given changed
+    /// paths — avoids sweeping every protected app on any unrelated write.
+    func verifyChangedPaths(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        // FSEvents reports canonical (symlink-resolved) paths, so resolve both
+        // sides before matching.
+        let changed = paths.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        for app in apps where app.isProtectionEnabled {
+            let bundle = URL(fileURLWithPath: app.bundlePath).resolvingSymlinksInPath().path
+            if changed.contains(where: { $0 == bundle || $0.hasPrefix(bundle + "/") }) {
+                verifyAndReapplyIfNeeded(appID: app.id)
+            }
+        }
+    }
+
+    /// Relaunches the Dock to force stubborn icon caches to refresh.
+    func forceDockRefresh() {
+        IconManager.forceDockRefresh()
     }
 
     /// Periodic sweep: re-verify every protected app.
@@ -450,7 +557,7 @@ final class AppStore {
         let bundleExists = app.bundleExists
 
         // 1) Is the custom icon actually applied right now?
-        let appliedCriterion = "Passes when the app's custom-icon resource (Icon␍) is present on disk. Evaluated only while protection is on."
+        let appliedCriterion = "Passes when the app's current icon visually matches your chosen asset — not just that some custom icon exists. Evaluated only while protection is on."
         if !app.isProtectionEnabled {
             checks.append(HealthCheck(
                 id: "applied", title: "Custom icon applied", level: .unknown,
@@ -466,17 +573,29 @@ final class AppStore {
                 id: "applied", title: "Custom icon applied", level: .warning,
                 detail: "No custom icon is assigned to this app yet.",
                 criterion: appliedCriterion))
-        } else if IconManager.isCustomIconApplied(at: app.bundleURL) {
-            checks.append(HealthCheck(
-                id: "applied", title: "Custom icon applied", level: .ok,
-                detail: "Your custom icon is currently in place.",
-                criterion: appliedCriterion))
         } else {
-            checks.append(HealthCheck(
-                id: "applied", title: "Custom icon applied", level: .problem,
-                detail: "The icon has been reset to the app's default (drift detected)."
-                    + (autoReapplyEnabled ? " It will be reapplied automatically." : " Auto-reapply is off, so it won't be corrected."),
-                criterion: appliedCriterion))
+            let expected = libraryIconImage(app.customIconID)
+            let hasCustom = IconManager.isCustomIconApplied(at: app.bundleURL)
+            let isOurs = expected.map { IconManager.isExpectedIconApplied(expected: $0, at: app.bundleURL) } ?? hasCustom
+
+            if isOurs {
+                checks.append(HealthCheck(
+                    id: "applied", title: "Custom icon applied", level: .ok,
+                    detail: "Your custom icon is currently in place.",
+                    criterion: appliedCriterion))
+            } else if hasCustom {
+                checks.append(HealthCheck(
+                    id: "applied", title: "Custom icon applied", level: .problem,
+                    detail: "A different icon is applied — something else overrode your choice."
+                        + (autoReapplyEnabled ? " It will be reapplied automatically." : " Auto-reapply is off, so it won't be corrected."),
+                    criterion: appliedCriterion))
+            } else {
+                checks.append(HealthCheck(
+                    id: "applied", title: "Custom icon applied", level: .problem,
+                    detail: "The icon has been reset to the app's default (drift detected)."
+                        + (autoReapplyEnabled ? " It will be reapplied automatically." : " Auto-reapply is off, so it won't be corrected."),
+                    criterion: appliedCriterion))
+            }
         }
 
         // 2) Resolution / quality of the assigned icon.
@@ -508,27 +627,30 @@ final class AppStore {
             criterion: "Passes when IconKeeper holds a copy of the app's original icon in its Backups folder."))
 
         // 4) Can IconKeeper still write to the bundle?
-        let writableCriterion = "Passes when the bundle exists, is outside macOS-protected (SIP) paths, and is writable by your account."
+        let writableCriterion = "Checks the bundle's volume (read-only system volume = protected) and your write permission — not just the path."
         if !bundleExists {
             checks.append(HealthCheck(
                 id: "writable", title: "Writable", level: .problem,
                 detail: "The app bundle is missing, so its icon can't be changed.",
                 criterion: writableCriterion))
-        } else if IconManager.isSystemProtected(app.bundleURL) {
-            checks.append(HealthCheck(
-                id: "writable", title: "Writable", level: .problem,
-                detail: "This app is in a macOS-protected location (SIP) and can't be modified.",
-                criterion: writableCriterion))
-        } else if FileManager.default.isWritableFile(atPath: app.bundleURL.path) {
-            checks.append(HealthCheck(
-                id: "writable", title: "Writable", level: .ok,
-                detail: "IconKeeper has permission to write this app's icon.",
-                criterion: writableCriterion))
         } else {
-            checks.append(HealthCheck(
-                id: "writable", title: "Writable", level: .problem,
-                detail: "IconKeeper doesn't have permission to modify this app, so reapply will fail.",
-                criterion: writableCriterion))
+            switch IconManager.writeCapability(for: app.bundleURL) {
+            case .writable:
+                checks.append(HealthCheck(
+                    id: "writable", title: "Writable", level: .ok,
+                    detail: "IconKeeper has permission to write this app's icon.",
+                    criterion: writableCriterion))
+            case .systemProtected:
+                checks.append(HealthCheck(
+                    id: "writable", title: "Writable", level: .problem,
+                    detail: "This is a built-in macOS app on the read-only system volume and can't be modified.",
+                    criterion: writableCriterion))
+            case .notWritable:
+                checks.append(HealthCheck(
+                    id: "writable", title: "Writable", level: .problem,
+                    detail: "IconKeeper doesn't have permission to modify this app, so reapply will fail.",
+                    criterion: writableCriterion))
+            }
         }
 
         // 5) Stability — how often we've had to step in.
@@ -585,12 +707,18 @@ final class AppStore {
 
     private func recomputeAllStatuses() {
         for app in apps {
-            if !app.bundleExists {
-                runtimeStatus[app.id] = .missing
-            } else if !app.isProtectionEnabled {
+            if !app.isProtectionEnabled {
                 runtimeStatus[app.id] = .paused
+            } else if let url = resolveURL(for: app.id) {
+                let applied: Bool
+                if let expected = libraryIconImage(app.customIconID) {
+                    applied = IconManager.isExpectedIconApplied(expected: expected, at: url)
+                } else {
+                    applied = IconManager.isCustomIconApplied(at: url)
+                }
+                runtimeStatus[app.id] = applied ? .protected : .drifted
             } else {
-                runtimeStatus[app.id] = IconManager.isCustomIconApplied(at: app.bundleURL) ? .protected : .drifted
+                runtimeStatus[app.id] = .missing
             }
         }
     }

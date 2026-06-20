@@ -96,4 +96,34 @@ struct PersistenceController {
     func readData(at url: URL) -> Data? {
         try? Data(contentsOf: url)
     }
+
+    // MARK: - Agent hand-off
+
+    /// File written only by the background agent and drained only by the GUI,
+    /// so the two never write the shared config concurrently.
+    var agentEventsURL: URL {
+        rootURL.appendingPathComponent("agent-events.json", isDirectory: false)
+    }
+
+    /// Appends background-reapply events for the GUI to pick up later.
+    func appendAgentEvents(_ entries: [ActivityEntry]) {
+        var all = loadAgentEvents()
+        all.append(contentsOf: entries)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(all) {
+            try? data.write(to: agentEventsURL, options: .atomic)
+        }
+    }
+
+    func loadAgentEvents() -> [ActivityEntry] {
+        guard let data = try? Data(contentsOf: agentEventsURL) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([ActivityEntry].self, from: data)) ?? []
+    }
+
+    func clearAgentEvents() {
+        try? FileManager.default.removeItem(at: agentEventsURL)
+    }
 }

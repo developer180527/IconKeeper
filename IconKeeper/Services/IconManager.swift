@@ -24,12 +24,25 @@ enum IconManager {
         bundleURL.path + "/" + customIconFilename
     }
 
-    /// `true` when a custom icon is currently applied to the bundle.
+    /// `true` when *some* custom icon resource is present on the bundle.
     ///
-    /// When an app update replaces the bundle, this `Icon\r` file disappears,
-    /// which is exactly the drift signal IconKeeper watches for.
+    /// This only proves a custom icon exists — not that it's *ours*. When an
+    /// app update replaces the bundle, this `Icon\r` file disappears, which is
+    /// the coarse drift signal. Use `isExpectedIconApplied` to also catch the
+    /// case where a different icon was set by the user or another tool.
     static func isCustomIconApplied(at bundleURL: URL) -> Bool {
         FileManager.default.fileExists(atPath: customIconPath(for: bundleURL))
+    }
+
+    /// `true` only when the bundle's current icon actually matches `expected`.
+    ///
+    /// Closes the "a different custom icon is present" blind spot: a manual
+    /// Finder override or third-party change leaves `Icon\r` in place, so a
+    /// presence check alone would wrongly report success. We additionally
+    /// compare the rendered icon to our asset.
+    static func isExpectedIconApplied(expected: NSImage, at bundleURL: URL) -> Bool {
+        guard isCustomIconApplied(at: bundleURL) else { return false }
+        return IconUtilities.iconsMatch(captureCurrentIcon(of: bundleURL), expected)
     }
 
     /// Applies the icon at `iconURL` to the bundle. Throws on failure.
@@ -48,17 +61,11 @@ enum IconManager {
         guard FileManager.default.fileExists(atPath: bundleURL.path) else {
             throw IconError.bundleMissing
         }
-        // Refuse SIP-protected locations up front for a clearer error.
-        if isSystemProtected(bundleURL) { throw IconError.notWritable }
+        try ensureWritable(bundleURL)
 
         let success = NSWorkspace.shared.setIcon(image, forFile: bundleURL.path, options: [])
-        guard success else {
-            throw FileManager.default.isWritableFile(atPath: bundleURL.path)
-                ? IconError.applyFailed
-                : IconError.notWritable
-        }
-        // Nudge Finder/Dock to refresh the displayed icon.
-        NSWorkspace.shared.noteFileSystemChanged(bundleURL.path)
+        guard success else { throw IconError.applyFailed }
+        refreshPresentation(for: bundleURL)
     }
 
     /// Removes any custom icon, reverting the bundle to its built-in icon.
@@ -66,11 +73,19 @@ enum IconManager {
         guard FileManager.default.fileExists(atPath: bundleURL.path) else {
             throw IconError.bundleMissing
         }
-        if isSystemProtected(bundleURL) { throw IconError.notWritable }
+        try ensureWritable(bundleURL)
 
         let success = NSWorkspace.shared.setIcon(nil, forFile: bundleURL.path, options: [])
         guard success else { throw IconError.removeFailed }
-        NSWorkspace.shared.noteFileSystemChanged(bundleURL.path)
+        refreshPresentation(for: bundleURL)
+    }
+
+    private static func ensureWritable(_ bundleURL: URL) throws {
+        switch writeCapability(for: bundleURL) {
+        case .writable: return
+        case .systemProtected: throw IconError.systemProtected
+        case .notWritable: throw IconError.notWritable
+        }
     }
 
     /// Captures the icon currently shown for the bundle (used for backups).
@@ -91,10 +106,53 @@ enum IconManager {
         return bundleURL.deletingPathExtension().lastPathComponent
     }
 
-    /// Whether the bundle lives in a SIP-protected, read-only system location.
-    static func isSystemProtected(_ bundleURL: URL) -> Bool {
-        let path = bundleURL.path
-        let protectedPrefixes = ["/System/", "/usr/", "/bin/", "/sbin/"]
-        return protectedPrefixes.contains { path.hasPrefix($0) }
+    /// Whether IconKeeper can write to a bundle, and why not if it can't.
+    enum WriteCapability {
+        case writable
+        /// On the read-only Signed System Volume (built-in macOS app).
+        case systemProtected
+        /// Exists on a writable volume but the user lacks write permission.
+        case notWritable
+    }
+
+    /// Determines write capability using the actual volume + permissions rather
+    /// than path prefixes. Modern macOS uses a read-only Signed System Volume
+    /// and firmlinks, so built-in apps can appear under /Applications while
+    /// still being unmodifiable — only the volume's read-only flag is reliable.
+    static func writeCapability(for bundleURL: URL) -> WriteCapability {
+        if let values = try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]),
+           values.volumeIsReadOnly == true {
+            return .systemProtected
+        }
+        if bundleURL.resolvingSymlinksInPath().path.hasPrefix("/System/") {
+            return .systemProtected
+        }
+        // setIcon writes an `Icon\r` file into the bundle directory, so we need
+        // write access to the directory itself.
+        return access(bundleURL.path, W_OK) == 0 ? .writable : .notWritable
+    }
+
+    /// Best-effort nudge to make Finder/Dock/IconServices pick up the new icon:
+    /// bump the bundle's modification date (busts caches) and notify the
+    /// workspace for the bundle and its parent directory.
+    static func refreshPresentation(for bundleURL: URL) {
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date()], ofItemAtPath: bundleURL.path
+        )
+        NSWorkspace.shared.noteFileSystemChanged(bundleURL.path)
+        NSWorkspace.shared.noteFileSystemChanged(bundleURL.deletingLastPathComponent().path)
+    }
+
+    /// Heavy-handed but reliable fallback for the stubborn Dock cache: relaunch
+    /// the Dock. User-triggered (it briefly flashes all Dock icons). Note a
+    /// *running* app's Dock tile is driven by the live process and only updates
+    /// on relaunch — no API changes that.
+    static func forceDockRefresh() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["Dock"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 }
