@@ -76,6 +76,17 @@ enum IconUtilities {
         guard let data = pngData(from: image, pixelSize: pixelSize) else { return nil }
         return data.hashValue
     }
+
+    /// The largest pixel dimension available across an image's representations.
+    /// Used to judge icon resolution quality (vector/device-matched reps report
+    /// 0 pixels, so we fall back to the logical size).
+    static func maxPixelSize(of image: NSImage) -> Int {
+        let largestRep = image.representations
+            .map { max($0.pixelsWide, $0.pixelsHigh) }
+            .max() ?? 0
+        if largestRep > 0 { return largestRep }
+        return Int(max(image.size.width, image.size.height))
+    }
 }
 
 /// Errors surfaced by icon operations.

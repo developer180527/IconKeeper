@@ -14,6 +14,7 @@ struct ProtectedAppRow: View {
     @Environment(AppStore.self) private var store
 
     private var status: AppStatus { store.status(for: app) }
+    private var health: IconHealth { store.health(for: app) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -32,6 +33,10 @@ struct ProtectedAppRow: View {
 
             Spacer()
 
+            // Hidden when paused — the status badge already reads "Paused".
+            if health.overall != .unknown {
+                HealthPill(level: health.overall)
+            }
             StatusBadge(status: status)
 
             Toggle("Protect", isOn: Binding(

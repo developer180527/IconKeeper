@@ -45,6 +45,7 @@ struct AppDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     iconComparison(for: app)
+                    HealthSection(health: store.health(for: app))
                     statsGrid(for: app)
                     activitySection(for: app)
                 }

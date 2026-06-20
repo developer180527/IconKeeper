@@ -442,6 +442,118 @@ final class AppStore {
         runtimeStatus[app.id] ?? (app.isProtectionEnabled ? .protected : .paused)
     }
 
+    // MARK: - Health
+
+    /// Computes a transparent, multi-factor health report for an app. Cheap
+    /// enough to call from view bodies (file existence + cached image checks).
+    func health(for app: ProtectedApp) -> IconHealth {
+        var checks: [HealthCheck] = []
+        let bundleExists = app.bundleExists
+
+        // 1) Is the custom icon actually applied right now?
+        let appliedCriterion = "Passes when the app's custom-icon resource (Icon␍) is present on disk. Evaluated only while protection is on."
+        if !app.isProtectionEnabled {
+            checks.append(HealthCheck(
+                id: "applied", title: "Custom icon applied", level: .unknown,
+                detail: "Protection is paused, so IconKeeper isn't enforcing this icon.",
+                criterion: appliedCriterion))
+        } else if !bundleExists {
+            checks.append(HealthCheck(
+                id: "applied", title: "Custom icon applied", level: .problem,
+                detail: "The app bundle wasn't found at its saved location.",
+                criterion: appliedCriterion))
+        } else if app.customIconID == nil {
+            checks.append(HealthCheck(
+                id: "applied", title: "Custom icon applied", level: .warning,
+                detail: "No custom icon is assigned to this app yet.",
+                criterion: appliedCriterion))
+        } else if IconManager.isCustomIconApplied(at: app.bundleURL) {
+            checks.append(HealthCheck(
+                id: "applied", title: "Custom icon applied", level: .ok,
+                detail: "Your custom icon is currently in place.",
+                criterion: appliedCriterion))
+        } else {
+            checks.append(HealthCheck(
+                id: "applied", title: "Custom icon applied", level: .problem,
+                detail: "The icon has been reset to the app's default (drift detected)."
+                    + (autoReapplyEnabled ? " It will be reapplied automatically." : " Auto-reapply is off, so it won't be corrected."),
+                criterion: appliedCriterion))
+        }
+
+        // 2) Resolution / quality of the assigned icon.
+        let qualityCriterion = "Passes at 512px or larger; warns below that. macOS renders icons up to 1024px in places like Finder's gallery view."
+        if let image = libraryIconImage(app.customIconID) {
+            let px = IconUtilities.maxPixelSize(of: image)
+            let level: HealthLevel = px >= 512 ? .ok : (px >= 128 ? .warning : .problem)
+            let detail = px >= 512
+                ? "High-resolution: includes detail up to \(px)px."
+                : "Largest size is \(px)px — may look soft on large Dock or Finder previews."
+            checks.append(HealthCheck(
+                id: "quality", title: "Icon resolution", level: level,
+                detail: detail, criterion: qualityCriterion))
+        } else {
+            checks.append(HealthCheck(
+                id: "quality", title: "Icon resolution", level: .unknown,
+                detail: "No assigned icon to evaluate.", criterion: qualityCriterion))
+        }
+
+        // 3) Is the original icon backed up for a clean restore?
+        let hasBackup = app.originalIconBackupFilename.map {
+            FileManager.default.fileExists(atPath: persistence.backupFileURL(for: $0).path)
+        } ?? false
+        checks.append(HealthCheck(
+            id: "backup", title: "Original backed up", level: hasBackup ? .ok : .warning,
+            detail: hasBackup
+                ? "A copy of the original icon is saved for one-click restore."
+                : "No saved copy of the original icon. You can still restore via macOS, but can't preview the original.",
+            criterion: "Passes when IconKeeper holds a copy of the app's original icon in its Backups folder."))
+
+        // 4) Can IconKeeper still write to the bundle?
+        let writableCriterion = "Passes when the bundle exists, is outside macOS-protected (SIP) paths, and is writable by your account."
+        if !bundleExists {
+            checks.append(HealthCheck(
+                id: "writable", title: "Writable", level: .problem,
+                detail: "The app bundle is missing, so its icon can't be changed.",
+                criterion: writableCriterion))
+        } else if IconManager.isSystemProtected(app.bundleURL) {
+            checks.append(HealthCheck(
+                id: "writable", title: "Writable", level: .problem,
+                detail: "This app is in a macOS-protected location (SIP) and can't be modified.",
+                criterion: writableCriterion))
+        } else if FileManager.default.isWritableFile(atPath: app.bundleURL.path) {
+            checks.append(HealthCheck(
+                id: "writable", title: "Writable", level: .ok,
+                detail: "IconKeeper has permission to write this app's icon.",
+                criterion: writableCriterion))
+        } else {
+            checks.append(HealthCheck(
+                id: "writable", title: "Writable", level: .problem,
+                detail: "IconKeeper doesn't have permission to modify this app, so reapply will fail.",
+                criterion: writableCriterion))
+        }
+
+        // 5) Stability — how often we've had to step in.
+        let count = app.reapplyCount
+        let stabilityLevel: HealthLevel = count <= 10 ? .ok : .warning
+        let stabilityDetail: String = {
+            if count == 0 { return "No icon resets recorded since you added this app." }
+            let base = "Auto-reapplied \(count) time\(count == 1 ? "" : "s") after updates."
+            return count > 10 ? base + " This app resets its icon unusually often." : base
+        }()
+        checks.append(HealthCheck(
+            id: "stability", title: "Stability", level: stabilityLevel,
+            detail: stabilityDetail,
+            criterion: "Warns after more than 10 automatic reapplies, which can signal an app that aggressively rewrites its own icon."))
+
+        let overall: HealthLevel = {
+            if !app.isProtectionEnabled { return .unknown }
+            let relevant = checks.map(\.level).filter { $0 != .unknown }
+            return relevant.max() ?? .unknown
+        }()
+
+        return IconHealth(overall: overall, checks: checks)
+    }
+
     // MARK: - Private helpers
 
     private func resolveLibraryItem(for icon: IconSource) throws -> IconLibraryItem {
