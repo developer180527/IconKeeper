@@ -38,9 +38,17 @@ enum AgentRunner {
             let expected = NSImage(contentsOf: iconURL)
 
             // Act on real drift only: our specific icon isn't currently applied.
-            let applied = expected.map { IconManager.isExpectedIconApplied(expected: $0, at: url) }
-                ?? IconManager.isCustomIconApplied(at: url)
+            let hasCustomIcon = IconManager.isCustomIconApplied(at: url)
+            let applied = hasCustomIcon
+                && (expected.map { IconUtilities.iconsMatch(IconManager.captureCurrentIcon(of: url), $0) } ?? true)
             guard !applied else { continue }
+
+            // Genuine icon showing (no custom present) → refresh the original
+            // backup to the app's current official icon before overriding it.
+            if !hasCustomIcon {
+                let backupURL = persistence.backupFileURL(for: "\(app.id.uuidString).png")
+                _ = try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: backupURL)
+            }
 
             do {
                 try IconManager.applyIcon(at: iconURL, to: url)

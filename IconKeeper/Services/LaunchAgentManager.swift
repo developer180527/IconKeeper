@@ -11,10 +11,10 @@
 //  user's home `~/Applications` directory — neither of which a static bundled
 //  plist can do.
 //
-//  Triggering: `RunAtLoad` covers login, `StartInterval` is the *reliable*
-//  periodic trigger (launchd `WatchPaths` on a directory proved unreliable for
-//  content changes on macOS, so it's kept only as a best-effort bonus). Each
-//  launch is a short-lived process that sweeps and exits — no resident daemon.
+//  Triggering: `RunAtLoad` covers login and `StartInterval` is the reliable
+//  periodic trigger. (launchd `WatchPaths` on a directory proved unreliable for
+//  content changes on macOS, so it's intentionally not used.) Each launch is a
+//  short-lived process that sweeps and exits — no resident daemon.
 //
 
 import Foundation
@@ -42,19 +42,16 @@ enum LaunchAgentManager {
     static func enable() throws {
         let execPath = Bundle.main.executableURL?.path ?? Bundle.main.bundlePath
 
-        var watchPaths = ["/Applications"]
-        let userApps = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Applications").path
-        if FileManager.default.fileExists(atPath: userApps) {
-            watchPaths.append(userApps)
-        }
-
+        // Triggers are RunAtLoad (login) + StartInterval (periodic). We do NOT
+        // use WatchPaths: it proved unreliable for /Applications content changes
+        // on macOS, and removing it eliminates any risk of launchd thrashing the
+        // process lifecycle during large installs. ThrottleInterval remains as a
+        // floor on relaunch frequency.
         let plist: [String: Any] = [
             "Label": label,
             "ProgramArguments": [execPath, "--agent"],
-            "RunAtLoad": true,            // reapply at login
-            "StartInterval": sweepInterval, // reliable periodic sweep
-            "WatchPaths": watchPaths,     // best-effort responsiveness (may not fire)
+            "RunAtLoad": true,
+            "StartInterval": sweepInterval,
             "ProcessType": "Background",
             "ThrottleInterval": 10,
         ]

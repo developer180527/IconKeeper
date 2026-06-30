@@ -12,14 +12,18 @@ import Foundation
 /// Layout (under `~/Library/Application Support/IconKeeper`):
 /// ```
 /// config.json        – PersistedState (apps, library metadata, activity)
+/// config.lock        – advisory lock coordinating GUI writes vs agent reads
 /// Library/           – imported custom icon files
 /// Backups/           – captured original icons (PNG)
+/// AgentEvents/       – one file per background-agent batch (drained by GUI)
 /// ```
 struct PersistenceController {
     let rootURL: URL
     let libraryURL: URL
     let backupsURL: URL
     let configURL: URL
+    let configLockURL: URL
+    let agentEventsDirURL: URL
 
     private let fileManager = FileManager.default
 
@@ -30,13 +34,28 @@ struct PersistenceController {
         libraryURL = rootURL.appendingPathComponent("Library", isDirectory: true)
         backupsURL = rootURL.appendingPathComponent("Backups", isDirectory: true)
         configURL = rootURL.appendingPathComponent("config.json", isDirectory: false)
+        configLockURL = rootURL.appendingPathComponent("config.lock", isDirectory: false)
+        agentEventsDirURL = rootURL.appendingPathComponent("AgentEvents", isDirectory: true)
         createDirectoriesIfNeeded()
     }
 
     private func createDirectoriesIfNeeded() {
-        for dir in [rootURL, libraryURL, backupsURL] {
+        for dir in [rootURL, libraryURL, backupsURL, agentEventsDirURL] {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+    }
+
+    /// Runs `body` while holding an advisory lock on `config.lock`. Shared lock
+    /// for reads, exclusive for writes — so the GUI and the headless agent never
+    /// read/write `config.json` at cross-purposes. Atomic writes already prevent
+    /// torn reads; this additionally prevents acting on a one-mutation-stale
+    /// snapshot during concurrent access.
+    private func withConfigLock<T>(_ operation: Int32, _ body: () -> T) -> T {
+        let fd = open(configLockURL.path, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else { return body() } // lock unavailable: proceed unlocked
+        flock(fd, operation)
+        defer { flock(fd, LOCK_UN); close(fd) }
+        return body()
     }
 
     // MARK: - Paths
@@ -52,18 +71,22 @@ struct PersistenceController {
     // MARK: - State
 
     func load() -> PersistedState {
-        guard let data = try? Data(contentsOf: configURL) else { return .empty }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(PersistedState.self, from: data)) ?? .empty
+        withConfigLock(LOCK_SH) {
+            guard let data = try? Data(contentsOf: configURL) else { return .empty }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return (try? decoder.decode(PersistedState.self, from: data)) ?? .empty
+        }
     }
 
     func save(_ state: PersistedState) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(state) else { return }
-        try? data.write(to: configURL, options: .atomic)
+        withConfigLock(LOCK_EX) {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(state) else { return }
+            try? data.write(to: configURL, options: .atomic)
+        }
     }
 
     // MARK: - Icon files
@@ -97,33 +120,38 @@ struct PersistenceController {
         try? Data(contentsOf: url)
     }
 
-    // MARK: - Agent hand-off
+    // MARK: - Agent hand-off (lock-free drop folder)
 
-    /// File written only by the background agent and drained only by the GUI,
-    /// so the two never write the shared config concurrently.
-    var agentEventsURL: URL {
-        rootURL.appendingPathComponent("agent-events.json", isDirectory: false)
-    }
-
-    /// Appends background-reapply events for the GUI to pick up later.
+    /// Each background-agent batch is written as its own uniquely-named file in
+    /// `AgentEvents/`. This sidesteps the read-modify-write race a single shared
+    /// file would have: the agent only ever *creates* files, and the GUI only
+    /// ever *reads then deletes* individual files by name. A new agent batch
+    /// landing mid-drain is simply picked up next time — nothing is clobbered.
     func appendAgentEvents(_ entries: [ActivityEntry]) {
-        var all = loadAgentEvents()
-        all.append(contentsOf: entries)
+        guard !entries.isEmpty else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(all) {
-            try? data.write(to: agentEventsURL, options: .atomic)
-        }
+        guard let data = try? encoder.encode(entries) else { return }
+        let fileURL = agentEventsDirURL.appendingPathComponent("\(UUID().uuidString).json", isDirectory: false)
+        try? data.write(to: fileURL, options: .atomic)
     }
 
-    func loadAgentEvents() -> [ActivityEntry] {
-        guard let data = try? Data(contentsOf: agentEventsURL) else { return [] }
+    /// Reads and removes all pending agent-event files, returning their entries.
+    func drainAgentEvents() -> [ActivityEntry] {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: agentEventsDirURL, includingPropertiesForKeys: nil
+        ) else { return [] }
+
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([ActivityEntry].self, from: data)) ?? []
-    }
-
-    func clearAgentEvents() {
-        try? FileManager.default.removeItem(at: agentEventsURL)
+        var collected: [ActivityEntry] = []
+        for file in files where file.pathExtension == "json" {
+            if let data = try? Data(contentsOf: file),
+               let entries = try? decoder.decode([ActivityEntry].self, from: data) {
+                collected.append(contentsOf: entries)
+            }
+            try? fileManager.removeItem(at: file)
+        }
+        return collected
     }
 }

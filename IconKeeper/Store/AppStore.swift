@@ -132,14 +132,13 @@ final class AppStore {
         sweepAll()
     }
 
-    /// Merges background-agent activity into the main log and clears the hand-off.
+    /// Merges background-agent activity into the main log (drop-folder drain).
     private func drainAgentEvents() {
-        let pending = persistence.loadAgentEvents()
+        let pending = persistence.drainAgentEvents()
         guard !pending.isEmpty else { return }
         activity.insert(contentsOf: pending, at: 0)
         activity.sort { $0.date > $1.date }
         if activity.count > 500 { activity.removeLast(activity.count - 500) }
-        persistence.clearAgentEvents()
         persist()
     }
 
@@ -319,22 +318,43 @@ final class AppStore {
 
         // Verify our *specific* asset is applied — not merely that some custom
         // icon exists (which a user/third-party override would also satisfy).
+        let hasCustomIcon = IconManager.isCustomIconApplied(at: bundleURL)
         let applied: Bool
         if let expected = libraryIconImage(iconID) {
-            applied = IconManager.isExpectedIconApplied(expected: expected, at: bundleURL)
+            applied = hasCustomIcon && IconUtilities.iconsMatch(IconManager.captureCurrentIcon(of: bundleURL), expected)
         } else {
-            applied = IconManager.isCustomIconApplied(at: bundleURL)
+            applied = hasCustomIcon
         }
 
         if applied {
             runtimeStatus[appID] = .protected
         } else {
+            // If no custom icon is present, the app's *genuine* icon is showing
+            // right now (an update or removal) — capture it as the refreshed
+            // original before we override it again. We skip this when a different
+            // custom icon is present, so we never record a third party's icon.
+            if !hasCustomIcon {
+                refreshOriginalBackup(appID: appID, bundleURL: bundleURL)
+            }
             log(.drifted, app: app.displayName, message: "Icon no longer matches your choice (update or external change).")
             runtimeStatus[appID] = .drifted
             if autoReapplyEnabled {
                 reapply(appID, automatic: true)
             }
         }
+    }
+
+    /// Captures the app's current genuine icon as the (single, latest) original
+    /// backup. Called only when the genuine icon is actually showing, so it
+    /// tracks official redesigns without archiving every past version.
+    private func refreshOriginalBackup(appID: UUID, bundleURL: URL) {
+        guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
+        let filename = apps[index].originalIconBackupFilename ?? "\(appID.uuidString).png"
+        let url = persistence.backupFileURL(for: filename)
+        guard (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: bundleURL), to: url)) != nil else { return }
+        apps[index].originalIconBackupFilename = filename
+        imageCache[url.path] = nil // overwritten on disk — drop the stale cache
+        persist()
     }
 
     /// Resolves an app's current location, healing a stale path via its bookmark
