@@ -710,7 +710,17 @@ final class AppStore {
     private func importIconFile(_ url: URL) throws -> IconLibraryItem {
         guard NSImage(contentsOf: url) != nil else { throw IconError.invalidIcon }
         let id = UUID()
-        let filename = try persistence.storeLibraryIcon(from: url, id: id)
+
+        // Existing .icns files are already authored at multiple sizes — keep them
+        // as-is. Any other image is normalized into a proper multi-size .icns.
+        let filename: String
+        if url.pathExtension.lowercased() == "icns" {
+            filename = try persistence.storeLibraryIcon(from: url, id: id)
+        } else {
+            filename = "\(id.uuidString).icns"
+            try IconConverter.writeICNS(source: url, to: persistence.libraryFileURL(for: filename))
+        }
+
         let name = url.deletingPathExtension().lastPathComponent
         let item = IconLibraryItem(id: id, name: name, filename: filename)
         library.append(item)
