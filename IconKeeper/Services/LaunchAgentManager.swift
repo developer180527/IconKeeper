@@ -23,10 +23,10 @@ import Foundation
 enum LaunchAgentManager {
     static let label = "developer180527.IconKeeper.Agent"
 
-    /// How often launchd relaunches the agent to sweep for drift (seconds).
-    /// Offline drift only happens on app updates, which are infrequent — 10
-    /// minutes keeps latency low at negligible cost (each run is milliseconds).
-    static let sweepInterval = 600
+    /// Default cadence (seconds) for the agent's drift sweep. Offline drift only
+    /// happens on app updates, which are infrequent — 10 minutes keeps latency
+    /// low at negligible cost (each run is milliseconds).
+    nonisolated static let sweepInterval = 600
 
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -39,7 +39,7 @@ enum LaunchAgentManager {
     }
 
     /// Writes the plist for the current executable and (re)loads it.
-    static func enable() throws {
+    static func enable(interval: Int = sweepInterval) throws {
         let execPath = Bundle.main.executableURL?.path ?? Bundle.main.bundlePath
 
         // Triggers are RunAtLoad (login) + StartInterval (periodic). We do NOT
@@ -51,7 +51,7 @@ enum LaunchAgentManager {
             "Label": label,
             "ProgramArguments": [execPath, "--agent"],
             "RunAtLoad": true,
-            "StartInterval": sweepInterval,
+            "StartInterval": max(60, interval),
             "ProcessType": "Background",
             "ThrottleInterval": 10,
         ]
@@ -72,24 +72,30 @@ enum LaunchAgentManager {
         try? FileManager.default.removeItem(at: plistURL)
     }
 
-    /// If installed but the recorded executable path no longer matches (the app
-    /// was moved/updated), rewrite and reload so the agent keeps working.
-    static func refresh() {
+    /// If installed but the recorded executable path or interval no longer
+    /// matches (app moved/updated, or the user changed the interval), rewrite
+    /// and reload so the agent stays correct.
+    static func refresh(interval: Int = sweepInterval) {
         guard isEnabled else { return }
-        if installedExecPath() != Bundle.main.executableURL?.path {
-            try? enable()
+        if installedExecPath() != Bundle.main.executableURL?.path || installedInterval() != interval {
+            try? enable(interval: interval)
         }
+    }
+
+    /// The interval recorded in the installed plist, if any.
+    static func installedInterval() -> Int? {
+        installedPlist()?["StartInterval"] as? Int
     }
 
     // MARK: - Private
 
     private static func installedExecPath() -> String? {
-        guard
-            let data = try? Data(contentsOf: plistURL),
-            let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-            let args = dict["ProgramArguments"] as? [String]
-        else { return nil }
-        return args.first
+        (installedPlist()?["ProgramArguments"] as? [String])?.first
+    }
+
+    private static func installedPlist() -> [String: Any]? {
+        guard let data = try? Data(contentsOf: plistURL) else { return nil }
+        return try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
     }
 
     private static var domain: String { "gui/\(getuid())" }

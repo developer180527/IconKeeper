@@ -18,6 +18,15 @@ struct SettingsView: View {
         ("Every 5 minutes", 300),
     ]
 
+    private let agentIntervalOptions: [(label: String, value: Double)] = [
+        ("Every 5 minutes", 300),
+        ("Every 10 minutes", 600),
+        ("Every 30 minutes", 1800),
+        ("Every hour", 3600),
+    ]
+
+    @State private var showRestoreAllConfirm = false
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
@@ -72,9 +81,35 @@ struct SettingsView: View {
 
             Section("Background protection") {
                 Toggle("Protect even when IconKeeper is closed", isOn: $store.backgroundProtectionEnabled)
-                Text("Installs a lightweight launchd agent that reapplies your icons after updates — at login and every few minutes — even if the app isn't running. There's no always-on process: the system briefly wakes the agent, it fixes any drift, and exits.")
+                Picker("Background check interval", selection: $store.agentSweepInterval) {
+                    ForEach(agentIntervalOptions, id: \.value) { option in
+                        Text(option.label).tag(option.value)
+                    }
+                }
+                .disabled(!store.backgroundProtectionEnabled)
+                LabeledContent("Agent status", value: store.backgroundAgentInstalled ? "Installed" : "Not installed")
+                Text("Installs a lightweight launchd agent that reapplies your icons after updates — at login and on the interval above — even if the app isn't running. There's no always-on process: the system briefly wakes the agent, it fixes any drift, and exits.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Maintenance") {
+                Button("Check all apps now") { store.sweepAll() }
+                    .disabled(store.apps.isEmpty)
+                Button("Reapply all icons") { store.reapplyAll() }
+                    .disabled(store.apps.isEmpty)
+                Button("Refresh Dock icons") { store.forceDockRefresh() }
+                Button("Restore all original icons", role: .destructive) { showRestoreAllConfirm = true }
+                    .disabled(store.apps.isEmpty)
+                Button("Reveal data in Finder") { store.revealDataInFinder() }
+            }
+            .confirmationDialog(
+                "Restore every app's original icon and pause protection?",
+                isPresented: $showRestoreAllConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Restore All", role: .destructive) { store.restoreAllOriginals() }
+                Button("Cancel", role: .cancel) {}
             }
 
             Section("About") {

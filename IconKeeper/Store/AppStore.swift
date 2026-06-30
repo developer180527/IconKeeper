@@ -67,7 +67,7 @@ final class AppStore {
         didSet {
             do {
                 if backgroundProtectionEnabled {
-                    try LaunchAgentManager.enable()
+                    try LaunchAgentManager.enable(interval: Int(agentSweepInterval))
                 } else {
                     LaunchAgentManager.disable()
                 }
@@ -77,6 +77,20 @@ final class AppStore {
             }
         }
     }
+
+    /// How often (seconds) the background agent sweeps for drift while the app
+    /// is closed. Applied immediately if the agent is installed.
+    var agentSweepInterval: Double {
+        didSet {
+            defaults.set(agentSweepInterval, forKey: Keys.agentInterval)
+            if backgroundProtectionEnabled {
+                try? LaunchAgentManager.enable(interval: Int(agentSweepInterval))
+            }
+        }
+    }
+
+    /// Whether the launchd background agent is currently installed.
+    var backgroundAgentInstalled: Bool { LaunchAgentManager.isEnabled }
 
     // MARK: - Private
 
@@ -90,6 +104,7 @@ final class AppStore {
         static let interval = "monitoringInterval"
         static let notifications = "notificationsEnabled"
         static let autoReapply = "autoReapplyEnabled"
+        static let agentInterval = "agentSweepInterval"
     }
 
     // MARK: - Lifecycle
@@ -100,6 +115,7 @@ final class AppStore {
         monitoringInterval = savedInterval ?? 30
         notificationsEnabled = (defaults.object(forKey: Keys.notifications) as? Bool) ?? true
         autoReapplyEnabled = (defaults.object(forKey: Keys.autoReapply) as? Bool) ?? true
+        agentSweepInterval = (defaults.object(forKey: Keys.agentInterval) as? Double) ?? 600
         launchAtLogin = LoginItemManager.isEnabled
         backgroundProtectionEnabled = LaunchAgentManager.isEnabled
 
@@ -125,7 +141,7 @@ final class AppStore {
         // Pull in anything the background agent reapplied while we were closed,
         // and make sure its plist still points at this executable.
         drainAgentEvents()
-        LaunchAgentManager.refresh()
+        LaunchAgentManager.refresh(interval: Int(agentSweepInterval))
 
         monitor.start(apps: apps)
         // Catch any drift that happened while IconKeeper wasn't running.
@@ -418,6 +434,18 @@ final class AppStore {
     /// Relaunches the Dock to force stubborn icon caches to refresh.
     func forceDockRefresh() {
         IconManager.forceDockRefresh()
+    }
+
+    /// Restores every app's original icon and pauses protection on each.
+    func restoreAllOriginals() {
+        for id in apps.map(\.id) {
+            restoreOriginal(id)
+        }
+    }
+
+    /// Reveals IconKeeper's data folder (config, library, backups) in Finder.
+    func revealDataInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([persistence.rootURL])
     }
 
     /// Periodic sweep: re-verify every protected app.
