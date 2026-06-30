@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CI / release artifacts
+*.zip

@@ -1,0 +1,59 @@
+name: Release
+
+# Fires when a version tag is pushed, e.g. `git tag v1.0.0 && git push origin v1.0.0`.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  release:
+    # Needs an Xcode 26.5+ runner image (macOS 26 SDK). Adjust if yours differs.
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build (Release, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project IconKeeper.xcodeproj \
+            -scheme IconKeeper \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: Package app into a zip
+        run: |
+          APP_PATH="build/Build/Products/Release/IconKeeper.app"
+          test -d "$APP_PATH" || { echo "Built app not found at $APP_PATH"; exit 1; }
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "IconKeeper-${{ github.ref_name }}.zip"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: IconKeeper ${{ github.ref_name }}
+          generate_release_notes: true
+          files: IconKeeper-*.zip
+          body: |
+            ## IconKeeper ${{ github.ref_name }}
+
+            Native macOS utility that keeps your custom app icons through updates.
+
+            > ⚠️ This build is **not code-signed or notarized**. On first launch,
+            > right-click the app and choose **Open**, or run:
+            > `xattr -dr com.apple.quarantine /Applications/IconKeeper.app`

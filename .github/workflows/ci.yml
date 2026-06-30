@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # IconKeeper targets the macOS 26 SDK, so it needs a runner image with
+    # Xcode 26.5+. Switch this label if your available runner image differs.
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build (Debug)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project IconKeeper.xcodeproj \
+            -scheme IconKeeper \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            clean build
