@@ -41,6 +41,7 @@ struct IconKeeperApp: App {
         Settings {
             SettingsView()
                 .environment(store)
+                .frame(width: 480, height: 560)
         }
 
         MenuBarExtra {

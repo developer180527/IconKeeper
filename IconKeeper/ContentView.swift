@@ -11,6 +11,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case dashboard
     case library
     case activity
+    case settings
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: "Dashboard"
         case .library: "Icon Library"
         case .activity: "Activity"
+        case .settings: "Settings"
         }
     }
 
@@ -27,6 +29,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .dashboard: "square.grid.2x2.fill"
         case .library: "photo.on.rectangle.angled"
         case .activity: "clock.arrow.circlepath"
+        case .settings: "gearshape.fill"
         }
     }
 }
@@ -55,6 +58,7 @@ struct ContentView: View {
             case .dashboard: DashboardView()
             case .library: IconLibraryView()
             case .activity: ActivityView()
+            case .settings: SettingsView()
             }
         }
         .frame(minWidth: 880, minHeight: 600)

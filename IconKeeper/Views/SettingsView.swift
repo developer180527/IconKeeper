@@ -2,7 +2,8 @@
 //  SettingsView.swift
 //  IconKeeper
 //
-//  Preferences: monitoring behavior, notifications, and startup.
+//  Preferences: monitoring behavior, notifications, startup, and about.
+//  Shown both in the sidebar and as the standard ⌘, Settings scene.
 //
 
 import SwiftUI
@@ -17,10 +18,35 @@ struct SettingsView: View {
         ("Every 5 minutes", 300),
     ]
 
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+    }
+
+    private var buildNumber: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+
     var body: some View {
         @Bindable var store = store
 
         Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 56, height: 56)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("IconKeeper").font(.title3.weight(.semibold))
+                        Text("Version \(appVersion) (\(buildNumber))")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Text("Keep your custom app icons through updates.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            }
+
             Section("Monitoring") {
                 Picker("Check for changes", selection: $store.monitoringInterval) {
                     ForEach(intervalOptions, id: \.value) { option in
@@ -52,6 +78,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
+                LabeledContent("Version", value: appVersion)
                 LabeledContent("Protected apps", value: "\(store.apps.count)")
                 LabeledContent("Library icons", value: "\(store.library.count)")
                 Text("IconKeeper runs outside the App Sandbox so it can write custom icons into other apps and watch them for updates. System apps protected by macOS (SIP) can't be modified.")
@@ -60,6 +87,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 460)
+        .navigationTitle("Settings")
     }
 }
