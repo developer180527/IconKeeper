@@ -96,6 +96,4 @@ Prebuilt apps are published on the [Releases](https://github.com/developer180527
 >
 > To confirm a signed build's identity yourself: `codesign -dv --verbose=4 /Applications/IconKeeper.app` (look for `TeamIdentifier=7PF6KT3R5Q`).
 
-## License
 
-To be determined by the project owner.
