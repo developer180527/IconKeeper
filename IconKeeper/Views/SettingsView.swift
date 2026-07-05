@@ -26,6 +26,8 @@ struct SettingsView: View {
     ]
 
     @State private var showRestoreAllConfirm = false
+    @State private var showUninstallConfirm = false
+    @State private var showDiscovery = false
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -99,6 +101,7 @@ struct SettingsView: View {
                 Button("Reapply all icons") { store.reapplyAll() }
                     .disabled(store.apps.isEmpty)
                 Button("Refresh Dock icons") { store.forceDockRefresh() }
+                Button("Scan for existing icons") { store.discoverOrphans(); showDiscovery = true }
                 Button("Restore all original icons", role: .destructive) { showRestoreAllConfirm = true }
                     .disabled(store.apps.isEmpty)
                 Button("Reveal data in Finder") { store.revealDataInFinder() }
@@ -120,8 +123,26 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section("Remove IconKeeper") {
+                Button("Prepare for uninstall…", role: .destructive) { showUninstallConfirm = true }
+                Text("Restores every app's original icon, turns off background protection, and removes the login agent — so you can safely delete IconKeeper. (Dragging the app to the Trash alone leaves your custom icons applied.)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .confirmationDialog(
+                "Restore all icons and remove IconKeeper's background components?",
+                isPresented: $showUninstallConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Restore & Prepare", role: .destructive) { store.prepareForUninstall() }
+                Button("Cancel", role: .cancel) {}
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
+        .sheet(isPresented: $showDiscovery) {
+            DiscoverySheet()
+        }
     }
 }

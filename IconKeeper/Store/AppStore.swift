@@ -15,6 +15,15 @@ enum IconSource {
     case library(UUID)
 }
 
+/// A bundle that carries IconKeeper's marker but isn't in the current config —
+/// e.g. the config was wiped but the customized apps still exist. Surfaced so
+/// the user can re-adopt or restore them.
+struct DiscoveredApp: Identifiable, Hashable {
+    let id: String // the resolved bundle path
+    let bundlePath: String
+    let displayName: String
+}
+
 @MainActor
 @Observable
 final class AppStore {
@@ -26,6 +35,9 @@ final class AppStore {
 
     /// Live, non-persisted status per app id.
     private(set) var runtimeStatus: [UUID: AppStatus] = [:]
+
+    /// Customized bundles found on disk that aren't in the config (recovery).
+    private(set) var discoveredOrphans: [DiscoveredApp] = []
 
     /// Surfaced to the UI when an action fails.
     var lastErrorMessage: String?
@@ -99,6 +111,9 @@ final class AppStore {
     private let defaults = UserDefaults.standard
     private var imageCache: [String: NSImage] = [:]
     private var hasStartedMonitoring = false
+    /// Last time each app drifted to its *genuine* icon — used to notice a user
+    /// repeatedly removing an icon by hand (vs. a one-off update).
+    private var lastGenuineDrift: [UUID: Date] = [:]
 
     private enum Keys {
         static let interval = "monitoringInterval"
@@ -146,6 +161,8 @@ final class AppStore {
         monitor.start(apps: apps)
         // Catch any drift that happened while IconKeeper wasn't running.
         sweepAll()
+        // Find customized bundles whose management records were lost.
+        discoverOrphans()
     }
 
     /// Merges background-agent activity into the main log (drop-folder drain).
@@ -202,11 +219,21 @@ final class AppStore {
             lastAppliedDate: Date()
         )
         apps.append(app)
+        writeMarker(for: app, at: standardized)
         runtimeStatus[app.id] = .protected
         log(.added, app: app.displayName, message: "Added and protected with “\(item.name)”.")
         persist()
         monitor.syncWatchers(for: apps)
         return app
+    }
+
+    /// Stamps IconKeeper's recovery marker onto a bundle it manages.
+    private func writeMarker(for app: ProtectedApp, at url: URL) {
+        guard let iconID = app.customIconID else { return }
+        BundleMarker.write(
+            ManagedMarker(appID: app.id, iconID: iconID, displayName: app.displayName, markedAt: Date()),
+            to: url
+        )
     }
 
     // MARK: - Icon actions
@@ -229,6 +256,7 @@ final class AppStore {
         let iconURL = persistence.libraryFileURL(for: item.filename)
         do {
             try IconManager.applyIcon(at: iconURL, to: bundleURL)
+            writeMarker(for: apps[index], at: bundleURL)
             apps[index].lastAppliedDate = Date()
             if automatic {
                 apps[index].reapplyCount += 1
@@ -259,6 +287,7 @@ final class AppStore {
         }
         do {
             try IconManager.removeCustomIcon(from: app.bundleURL)
+            BundleMarker.remove(from: app.bundleURL)
             apps[index].isProtectionEnabled = false
             runtimeStatus[appID] = .paused
             log(.restored, app: app.displayName, message: "Restored original icon and paused protection.")
@@ -291,6 +320,7 @@ final class AppStore {
         if let backup = app.originalIconBackupFilename {
             persistence.removeBackup(filename: backup)
         }
+        BundleMarker.remove(from: app.bundleURL)
         apps.remove(at: index)
         runtimeStatus[appID] = nil
         log(.removed, app: app.displayName, message: "Removed from IconKeeper.")
@@ -351,6 +381,7 @@ final class AppStore {
             // custom icon is present, so we never record a third party's icon.
             if !hasCustomIcon {
                 refreshOriginalBackup(appID: appID, bundleURL: bundleURL)
+                nudgeIfRepeatedRemoval(appID: appID, name: app.displayName)
             }
             log(.drifted, app: app.displayName, message: "Icon no longer matches your choice (update or external change).")
             runtimeStatus[appID] = .drifted
@@ -446,6 +477,124 @@ final class AppStore {
     /// Reveals IconKeeper's data folder (config, library, backups) in Finder.
     func revealDataInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting([persistence.rootURL])
+    }
+
+    // MARK: - Discovery & recovery
+
+    /// Scans the Applications folders for bundles that carry IconKeeper's marker
+    /// but aren't tracked — i.e. customizations orphaned by a wiped config.
+    func discoverOrphans() {
+        let fileManager = FileManager.default
+        let dirs = [
+            "/Applications",
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path,
+        ]
+        let tracked = Set(apps.map { URL(fileURLWithPath: $0.bundlePath).resolvingSymlinksInPath().path })
+
+        var found: [DiscoveredApp] = []
+        for dir in dirs {
+            guard let entries = try? fileManager.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".app") {
+                let url = URL(fileURLWithPath: dir + "/" + entry)
+                let resolved = url.resolvingSymlinksInPath().path
+                guard !tracked.contains(resolved),
+                      BundleMarker.exists(at: url),
+                      IconManager.isCustomIconApplied(at: url) else { continue }
+                let name = BundleMarker.read(from: url)?.displayName ?? IconManager.displayName(of: url)
+                found.append(DiscoveredApp(id: resolved, bundlePath: url.path, displayName: name))
+            }
+        }
+        discoveredOrphans = found
+    }
+
+    /// Re-adopts a discovered app: extracts its currently-applied icon back into
+    /// the library and resumes managing it. Works even if the original library
+    /// asset was lost, because the applied icon is read straight off the bundle.
+    func adoptDiscovered(_ discovered: DiscoveredApp) {
+        let url = URL(fileURLWithPath: discovered.bundlePath)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            dismissDiscovered(discovered); return
+        }
+
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("IconKeeper-adopt-\(UUID().uuidString).png")
+        guard (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: tmp)) != nil else { return }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        do {
+            let item = try importIconFile(tmp)
+            let app = ProtectedApp(
+                bundlePath: url.standardizedFileURL.path,
+                bundleIdentifier: IconManager.bundleIdentifier(of: url),
+                displayName: discovered.displayName,
+                customIconID: item.id,
+                originalIconBackupFilename: nil, // genuine is hidden now; refreshes on next update-drift
+                bookmark: try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+                isProtectionEnabled: true,
+                lastAppliedDate: Date()
+            )
+            apps.append(app)
+            writeMarker(for: app, at: url)
+            runtimeStatus[app.id] = .protected
+            log(.added, app: app.displayName, message: "Re-adopted after discovery.")
+            persist()
+            monitor.syncWatchers(for: apps)
+            dismissDiscovered(discovered)
+        } catch {
+            lastErrorMessage = "Couldn't adopt \(discovered.displayName): \(error.localizedDescription)"
+        }
+    }
+
+    /// Removes the custom icon from a discovered app, reverting it to genuine.
+    func restoreDiscovered(_ discovered: DiscoveredApp) {
+        let url = URL(fileURLWithPath: discovered.bundlePath)
+        try? IconManager.removeCustomIcon(from: url)
+        BundleMarker.remove(from: url)
+        log(.restored, app: discovered.displayName, message: "Restored original icon (recovered).")
+        dismissDiscovered(discovered)
+    }
+
+    func dismissDiscovered(_ discovered: DiscoveredApp) {
+        discoveredOrphans.removeAll { $0.id == discovered.id }
+    }
+
+    func dismissAllDiscovered() {
+        discoveredOrphans.removeAll()
+    }
+
+    // MARK: - Clean uninstall
+
+    /// Restores every managed app to its genuine icon, removes markers, and turns
+    /// off the background components — so the app can be safely deleted. (Trashing
+    /// the app runs no code, so this is the only clean-removal path.)
+    func prepareForUninstall() {
+        for app in apps {
+            if let url = resolveURL(for: app.id) {
+                try? IconManager.removeCustomIcon(from: url)
+                BundleMarker.remove(from: url)
+            }
+        }
+        apps.removeAll()
+        runtimeStatus.removeAll()
+        backgroundProtectionEnabled = false // didSet removes the LaunchAgent
+        launchAtLogin = false               // didSet unregisters the login item
+        LaunchAgentManager.disable()
+        log(.removed, app: "IconKeeper", message: "Prepared for uninstall — restored all icons and removed background components.")
+        persist()
+        monitor.syncWatchers(for: apps)
+    }
+
+    /// Posts a gentle nudge if a user appears to be repeatedly removing an icon
+    /// by hand (two genuine-drift events within a short window).
+    private func nudgeIfRepeatedRemoval(appID: UUID, name: String) {
+        let now = Date()
+        if let last = lastGenuineDrift[appID], now.timeIntervalSince(last) < 45 {
+            NotificationManager.shared.notify(
+                title: "Keep removing \(name)'s icon?",
+                body: "IconKeeper keeps restoring it. Open IconKeeper and choose Restore Original to remove it and pause protection."
+            )
+        }
+        lastGenuineDrift[appID] = now
     }
 
     /// Periodic sweep: re-verify every protected app.

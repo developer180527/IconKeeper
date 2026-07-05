@@ -1,3 +1,0 @@
-* Need to make a settings panel for configuring the app. 
-
-* 

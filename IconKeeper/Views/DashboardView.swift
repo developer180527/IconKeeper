@@ -18,9 +18,12 @@ struct DashboardView: View {
 
     @State private var addSheet: AddSheet?
     @State private var detailAppID: UUID?
+    @State private var showDiscovery = false
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
+            if !store.discoveredOrphans.isEmpty { discoveryBanner }
+            Group {
             if store.apps.isEmpty {
                 EmptyDashboard { addSheet = AddSheet(appURL: $0) }
             } else {
@@ -30,6 +33,7 @@ struct DashboardView: View {
                     }
                 }
                 .listStyle(.inset)
+            }
             }
         }
         .navigationTitle("Protected Apps")
@@ -70,6 +74,9 @@ struct DashboardView: View {
         .sheet(item: $detailAppID) { id in
             AppDetailView(appID: id)
         }
+        .sheet(isPresented: $showDiscovery) {
+            DiscoverySheet()
+        }
         // Drop a .app anywhere on the dashboard to jump straight into Add.
         .dropDestination(for: URL.self) { urls, _ in
             guard let appURL = urls.first(where: { $0.pathExtension.lowercased() == "app" }) else {
@@ -78,6 +85,28 @@ struct DashboardView: View {
             addSheet = AddSheet(appURL: appURL)
             return true
         }
+    }
+
+    private var discoveryBanner: some View {
+        let count = store.discoveredOrphans.count
+        return HStack(spacing: 10) {
+            Image(systemName: "sparkle.magnifyingglass")
+                .foregroundStyle(.orange)
+            Text("\(count) app\(count == 1 ? "" : "s") with IconKeeper icons \(count == 1 ? "isn't" : "aren't") being managed.")
+                .font(.callout)
+            Spacer()
+            Button("Review") { showDiscovery = true }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            Button { store.dismissAllDiscovered() } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.orange.opacity(0.12))
     }
 }
 
