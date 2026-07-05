@@ -63,7 +63,7 @@ Monitoring cadence, notifications, startup, background protection, and maintenan
 - **Background protection.** An optional launchd LaunchAgent re-checks at login and on an interval; each run is a short-lived process that fixes drift and exits — there is no resident daemon.
 - **System apps are respected.** Built-in apps on the read-only system volume (SIP) are detected by volume and never modified.
 
-> **Note:** IconKeeper ships **outside the App Sandbox** because it must write icons into other apps' bundles and watch them for changes — the standard model for this category of utility (direct/notarized distribution).
+> **Note:** IconKeeper ships **outside the App Sandbox** because it must write icons into other apps' bundles and watch them for changes — the standard model for this category of utility (direct distribution).
 
 ## Requirements
 
@@ -86,10 +86,15 @@ Or just open `IconKeeper.xcodeproj` in Xcode and run.
 
 Prebuilt apps are published on the [Releases](https://github.com/developer180527/IconKeeper/releases) page.
 
-> Release builds from CI are **not code-signed or notarized**. On first launch, right-click the app and choose **Open**, or clear the quarantine flag:
+- The automated build from CI is a **zip, unsigned**.
+- Some releases also include a **DMG that is code-signed** with an Apple Development certificate — this verifies the build hasn't been tampered with since it left this machine, but it is **not notarized** (notarization requires a paid Apple Developer Program membership). Gatekeeper still blocks first launch either way.
+
+> On first launch, right-click the app and choose **Open**, or clear the quarantine flag:
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/IconKeeper.app
 > ```
+>
+> To confirm a signed build's identity yourself: `codesign -dv --verbose=4 /Applications/IconKeeper.app` (look for `TeamIdentifier=7PF6KT3R5Q`).
 
 ## License
 
