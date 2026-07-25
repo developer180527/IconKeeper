@@ -52,6 +52,16 @@ enum AgentRunner {
 
             do {
                 try IconManager.applyIcon(at: iconURL, to: url)
+                // Re-stamp the recovery marker: an app update replaces the whole
+                // bundle, which takes the xattr with it. Without this, any drift
+                // the agent (rather than the GUI) fixes would leave the item
+                // permanently invisible to discovery.
+                if let iconID = app.customIconID {
+                    BundleMarker.write(
+                        ManagedMarker(appID: app.id, iconID: iconID, displayName: app.displayName, markedAt: Date()),
+                        to: url
+                    )
+                }
                 events.append(ActivityEntry(
                     kind: .reapplied,
                     appName: app.displayName,

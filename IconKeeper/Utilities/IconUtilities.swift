@@ -140,6 +140,7 @@ enum IconError: LocalizedError {
     case notWritable
     case systemProtected
     case encodingFailed
+    case unsupportedItem
 
     var errorDescription: String? {
         switch self {
@@ -147,6 +148,7 @@ enum IconError: LocalizedError {
         case .applyFailed: "macOS refused to set the icon. Check that you have permission to modify this app."
         case .removeFailed: "Couldn't remove the custom icon from this app."
         case .bundleMissing: "The application bundle could not be found."
+        case .unsupportedItem: "IconKeeper can protect apps and folders. Individual files aren't supported, because macOS discards their custom icon whenever the file is saved."
         case .notWritable: "IconKeeper doesn't have permission to modify this app. Try moving it to /Applications or check its permissions."
         case .systemProtected: "This is a built-in macOS app on the read-only system volume and can't be modified."
         case .encodingFailed: "Couldn't process the icon image."

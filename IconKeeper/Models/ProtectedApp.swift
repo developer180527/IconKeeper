@@ -2,12 +2,38 @@
 //  ProtectedApp.swift
 //  IconKeeper
 //
-//  The persisted record for an application whose icon IconKeeper manages.
+//  The persisted record for an item (app bundle or folder) whose icon
+//  IconKeeper manages.
 //
 
 import Foundation
 
-/// A single application registered with IconKeeper.
+/// What kind of thing IconKeeper is protecting.
+///
+/// Both cases store their custom icon the same way — as a hidden `Icon\r`
+/// file inside the directory — so the whole engine treats them alike. They
+/// differ only in metadata (folders have no bundle identifier) and in how
+/// often they drift (apps get replaced by updates; folders rarely change).
+enum ItemKind: String, Codable, Hashable {
+    case app
+    case folder
+
+    var label: String {
+        switch self {
+        case .app: "App"
+        case .folder: "Folder"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .app: "app.badge"
+        case .folder: "folder.fill"
+        }
+    }
+}
+
+/// A single item registered with IconKeeper.
 ///
 /// Only persistable data lives here. Transient, runtime state (current
 /// drift status, last error, in-flight work) is tracked separately by
@@ -15,8 +41,11 @@ import Foundation
 struct ProtectedApp: Identifiable, Codable, Hashable {
     let id: UUID
 
-    /// Absolute path to the `.app` bundle, e.g. `/Applications/Foo.app`.
+    /// Absolute path to the `.app` bundle or folder, e.g. `/Applications/Foo.app`.
     var bundlePath: String
+
+    /// Whether this record is an app bundle or a plain folder.
+    var kind: ItemKind
 
     /// The bundle identifier captured at registration (best effort).
     var bundleIdentifier: String?
@@ -47,6 +76,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
     init(
         id: UUID = UUID(),
         bundlePath: String,
+        kind: ItemKind = .app,
         bundleIdentifier: String? = nil,
         displayName: String,
         customIconID: UUID? = nil,
@@ -59,6 +89,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
     ) {
         self.id = id
         self.bundlePath = bundlePath
+        self.kind = kind
         self.bundleIdentifier = bundleIdentifier
         self.displayName = displayName
         self.customIconID = customIconID
@@ -70,9 +101,28 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         self.reapplyCount = reapplyCount
     }
 
+    /// Custom decoding so configurations written before folder support (which
+    /// have no `kind` key) still load — those records are all app bundles.
+    /// Encoding stays synthesized.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        bundlePath = try container.decode(String.self, forKey: .bundlePath)
+        kind = try container.decodeIfPresent(ItemKind.self, forKey: .kind) ?? .app
+        bundleIdentifier = try container.decodeIfPresent(String.self, forKey: .bundleIdentifier)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        customIconID = try container.decodeIfPresent(UUID.self, forKey: .customIconID)
+        originalIconBackupFilename = try container.decodeIfPresent(String.self, forKey: .originalIconBackupFilename)
+        bookmark = try container.decodeIfPresent(Data.self, forKey: .bookmark)
+        isProtectionEnabled = try container.decode(Bool.self, forKey: .isProtectionEnabled)
+        dateAdded = try container.decode(Date.self, forKey: .dateAdded)
+        lastAppliedDate = try container.decodeIfPresent(Date.self, forKey: .lastAppliedDate)
+        reapplyCount = try container.decodeIfPresent(Int.self, forKey: .reapplyCount) ?? 0
+    }
+
     var bundleURL: URL { URL(fileURLWithPath: bundlePath) }
 
-    /// `true` when the bundle still exists on disk.
+    /// `true` when the item still exists on disk.
     var bundleExists: Bool {
         FileManager.default.fileExists(atPath: bundlePath)
     }

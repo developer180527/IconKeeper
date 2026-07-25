@@ -14,6 +14,8 @@ struct DashboardView: View {
     private struct AddSheet: Identifiable {
         let id = UUID()
         var appURL: URL?
+        /// Additional items when several were dropped at once (batch apply).
+        var extraURLs: [URL] = []
     }
 
     @State private var addSheet: AddSheet?
@@ -25,7 +27,9 @@ struct DashboardView: View {
             if !store.discoveredOrphans.isEmpty { discoveryBanner }
             Group {
             if store.apps.isEmpty {
-                EmptyDashboard { addSheet = AddSheet(appURL: $0) }
+                EmptyDashboard { urls in
+                    addSheet = AddSheet(appURL: urls.first, extraURLs: Array(urls.dropFirst()))
+                }
             } else {
                 List {
                     ForEach(store.apps) { app in
@@ -36,7 +40,7 @@ struct DashboardView: View {
             }
             }
         }
-        .navigationTitle("Protected Apps")
+        .navigationTitle("Protected Items")
         .toolbar {
             ToolbarItemGroup {
                 Menu {
@@ -63,13 +67,13 @@ struct DashboardView: View {
                 Button {
                     addSheet = AddSheet(appURL: nil)
                 } label: {
-                    Label("Add App", systemImage: "plus")
+                    Label("Add Items", systemImage: "plus")
                 }
                 .keyboardShortcut("n", modifiers: .command)
             }
         }
         .sheet(item: $addSheet) { ctx in
-            AddAppView(initialAppURL: ctx.appURL)
+            AddAppView(initialAppURL: ctx.appURL, additionalURLs: ctx.extraURLs)
         }
         .sheet(item: $detailAppID) { id in
             AppDetailView(appID: id)
@@ -77,12 +81,11 @@ struct DashboardView: View {
         .sheet(isPresented: $showDiscovery) {
             DiscoverySheet()
         }
-        // Drop a .app anywhere on the dashboard to jump straight into Add.
+        // Drop apps/folders anywhere on the dashboard to jump straight into Add.
         .dropDestination(for: URL.self) { urls, _ in
-            guard let appURL = urls.first(where: { $0.pathExtension.lowercased() == "app" }) else {
-                return false
-            }
-            addSheet = AddSheet(appURL: appURL)
+            let items = urls.filter { IconManager.classify($0) != nil }
+            guard let first = items.first else { return false }
+            addSheet = AddSheet(appURL: first, extraURLs: Array(items.dropFirst()))
             return true
         }
     }
@@ -112,20 +115,20 @@ struct DashboardView: View {
 
 /// Empty-state hero with a large drop target.
 private struct EmptyDashboard: View {
-    var onDropApp: (URL) -> Void
+    var onDropItems: ([URL]) -> Void
 
     var body: some View {
         VStack {
             Spacer()
-            DropZone(allowedExtensions: ["app"]) { urls in
-                if let url = urls.first { onDropApp(url) }
+            DropZone(accepts: { IconManager.classify($0) != nil }) { urls in
+                onDropItems(urls)
             } content: { targeted in
                 VStack(spacing: 16) {
                     Image(systemName: "square.and.arrow.down.on.square")
                         .font(.system(size: 56, weight: .light))
                         .foregroundStyle(targeted ? Color.accentColor : .secondary)
                     VStack(spacing: 6) {
-                        Text("Drop an app here to protect its icon")
+                        Text("Drop apps or folders here to protect their icons")
                             .font(.title3.weight(.semibold))
                         Text("IconKeeper backs up the original, applies your custom icon,\nand puts it back automatically whenever an update resets it.")
                             .font(.callout)
@@ -133,9 +136,10 @@ private struct EmptyDashboard: View {
                             .multilineTextAlignment(.center)
                     }
                     Button {
-                        if let url = Panels.chooseApplication() { onDropApp(url) }
+                        let picked = Panels.chooseItems()
+                        if !picked.isEmpty { onDropItems(picked) }
                     } label: {
-                        Label("Choose App…", systemImage: "folder")
+                        Label("Choose…", systemImage: "folder")
                     }
                     .controlSize(.large)
                     .padding(.top, 4)

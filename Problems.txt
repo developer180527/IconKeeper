@@ -1,3 +1,0 @@
-#MacOS still remembers the last app icon so delete from info panel of the app works but the app's agent immediatluy applies the user selected icon. Need to remove the original from the app's bundle and back it up elsewhere 
-
-#What if someone deletes the app after applying the icons to his apps from IconKeeper? how will he reset his icons? what if he reinstalls the app, Then will he able to Manage his icons? Should we keep a database registry?

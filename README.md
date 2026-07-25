@@ -1,6 +1,6 @@
 # IconKeeper
 
-**Keep your custom macOS app icons through updates.** IconKeeper lets you drop in a `.app` and a custom icon, applies it, and then quietly watches for the day an update wipes it — automatically putting your icon back.
+**Keep your custom macOS icons through updates.** IconKeeper lets you drop in an app or folder plus a custom icon, applies it, and then quietly watches for the day an update wipes it — automatically putting your icon back.
 
 [![CI](https://github.com/developer180527/IconKeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/developer180527/IconKeeper/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/developer180527/IconKeeper?display_name=tag)](https://github.com/developer180527/IconKeeper/releases)
@@ -11,20 +11,20 @@ Native SwiftUI + AppKit. A polished dashboard, a personal icon library, a menu b
 ## Screenshots
 
 ### Dashboard
-Drag in an app to start protecting its icon. Each row shows live status and health.
+Drag in apps or folders to start protecting their icons. Each row shows live status and health.
 
 ![IconKeeper dashboard](Assets/App%20Screenshots/Screenshot%202.png)
 
 ---
 
-### Protect an app
-Drop the app and the icon you want it to keep, preview the before → after, then apply.
+### Protect an app or folder
+Drop the items and the icon you want them to keep, preview the before → after, then apply. Drop several at once to give them all the same icon.
 
 ![Protect an app](Assets/App%20Screenshots/Screenshot%203.png)
 
 ---
 
-### App detail & health
+### Item detail & health
 A transparent, per-criterion health report — each check shows its verdict *and* the rule behind it.
 
 ![App detail and health](Assets/App%20Screenshots/Screenshot%204.png)
@@ -45,10 +45,12 @@ Monitoring cadence, notifications, startup, background protection, and maintenan
 
 ## Features
 
-- **Drag-and-drop** an app + icon, with a live before/after preview.
+- **Apps and folders** — protect `.app` bundles and ordinary folders alike.
+- **Drag-and-drop** items + icon, with a live before/after preview.
+- **Batch apply** — drop or select many items at once and give them all the same icon, or push a library icon to any set of tracked items.
 - **Automatic reapply** — detects when an update (or anything else) resets the icon and restores *your* choice.
-- **Original always recoverable** — restore reveals the app's genuine current icon natively; the backup tracks official redesigns automatically.
-- **Personal icon library** — import once, reuse across apps, batch-apply.
+- **Original always recoverable** — restore reveals the item's genuine current icon natively; the backup tracks official redesigns automatically.
+- **Personal icon library** — import once, reuse across items, batch-apply.
 - **Automatic icon conversion** — any PNG/JPEG/TIFF/HEIC is normalized into a proper multi-size `.icns` (downscale-only, no blurry upscaling).
 - **Transparent health checks** — applied/matching, resolution, backup, writability, stability.
 - **Menu bar companion** — quick status and reapply, runs quietly in the background.
@@ -57,13 +59,15 @@ Monitoring cadence, notifications, startup, background protection, and maintenan
 
 ## How it works
 
-- **Icon override, not destruction.** IconKeeper uses `NSWorkspace.setIcon`, which stores your icon as an `Icon\r` resource on the bundle — the app's real icon inside `Contents/Resources` is never touched. Restoring just removes the override, revealing the app's *current* genuine icon.
+- **Icon override, not destruction.** IconKeeper uses `NSWorkspace.setIcon`, which stores your icon as an `Icon\r` resource inside the directory — the app's real icon in `Contents/Resources` is never touched. Restoring just removes the override, revealing the item's *current* genuine icon.
+- **Folders work the same way.** A folder stores its custom icon in exactly the same `Icon\r` file an app bundle does, so protection, drift detection, and restore behave identically. Folders rarely drift, since nothing replaces them the way an update replaces an app.
+- **Individual files aren't supported — deliberately.** A regular file has nowhere to put an `Icon\r`, so macOS keeps its custom icon in the file's resource fork. That is destroyed every time an app saves the file atomically (which most apps do), taking IconKeeper's own tracking metadata with it. Supporting files would mean fighting every save, so IconKeeper declines them with a clear message instead.
 - **Drift detection.** Protection means *your specific* icon is applied — not merely that some custom icon exists. IconKeeper compares the on-disk icon to your asset, so a third-party or manual change is caught too.
-- **Monitoring.** A single recursive FSEvents stream over the app folders reacts to bundle replacement and in-bundle edits (targeted to the affected app), backed by a periodic safety-net sweep.
+- **Monitoring.** A single FSEvents stream over the parent directories of everything you protect reacts to bundle replacement and in-place edits (targeted to just the affected item), backed by a periodic safety-net sweep.
 - **Background protection.** An optional launchd LaunchAgent re-checks at login and on an interval; each run is a short-lived process that fixes drift and exits — there is no resident daemon.
 - **System apps are respected.** Built-in apps on the read-only system volume (SIP) are detected by volume and never modified.
 
-> **Note:** IconKeeper ships **outside the App Sandbox** because it must write icons into other apps' bundles and watch them for changes — the standard model for this category of utility (direct distribution).
+> **Note:** IconKeeper ships **outside the App Sandbox** because it must write icons into other apps' bundles and folders and watch them for changes — the standard model for this category of utility (direct distribution).
 
 ## Requirements
 

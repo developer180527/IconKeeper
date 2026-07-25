@@ -98,12 +98,25 @@ enum IconManager {
         Bundle(url: bundleURL)?.bundleIdentifier
     }
 
-    /// Best-effort read of a bundle's user-facing name.
-    static func displayName(of bundleURL: URL) -> String {
+    /// Best-effort read of an item's user-facing name.
+    ///
+    /// Folder names are used verbatim — stripping the "extension" would mangle
+    /// perfectly ordinary names like "v1.2 assets".
+    static func displayName(of bundleURL: URL, kind: ItemKind = .app) -> String {
+        guard kind == .app else { return bundleURL.lastPathComponent }
         let info = Bundle(url: bundleURL)?.infoDictionary
         if let name = info?["CFBundleDisplayName"] as? String, !name.isEmpty { return name }
         if let name = info?["CFBundleName"] as? String, !name.isEmpty { return name }
         return bundleURL.deletingPathExtension().lastPathComponent
+    }
+
+    /// Classifies a URL as an app bundle or a plain folder. Returns `nil` for
+    /// regular files, which IconKeeper doesn't manage.
+    static func classify(_ url: URL) -> ItemKind? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return url.pathExtension.lowercased() == "app" ? .app : .folder
     }
 
     /// Whether IconKeeper can write to a bundle, and why not if it can't.

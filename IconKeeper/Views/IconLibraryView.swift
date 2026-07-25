@@ -105,7 +105,7 @@ struct IconLibraryView: View {
         .frame(maxWidth: .infinity)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
         .contextMenu {
-            Button("Apply to Apps…", systemImage: "square.grid.2x2") { batchTarget = item }
+            Button("Apply to Items…", systemImage: "square.grid.2x2") { batchTarget = item }
             Button("Rename…", systemImage: "pencil") { renameTarget = item }
             Divider()
             Button("Delete", systemImage: "trash", role: .destructive) {

@@ -184,6 +184,8 @@ final class AppStore {
         let path = standardized.path
 
         guard FileManager.default.fileExists(atPath: path) else { throw IconError.bundleMissing }
+        // Only directories (app bundles and folders) can carry an `Icon\r`.
+        guard let kind = IconManager.classify(standardized) else { throw IconError.unsupportedItem }
 
         // If already tracked, just re-assign the icon instead of duplicating.
         if let existing = apps.first(where: { $0.bundlePath == path }) {
@@ -210,8 +212,9 @@ final class AppStore {
         let app = ProtectedApp(
             id: appID,
             bundlePath: path,
-            bundleIdentifier: IconManager.bundleIdentifier(of: standardized),
-            displayName: IconManager.displayName(of: standardized),
+            kind: kind,
+            bundleIdentifier: kind == .app ? IconManager.bundleIdentifier(of: standardized) : nil,
+            displayName: IconManager.displayName(of: standardized, kind: kind),
             customIconID: item.id,
             originalIconBackupFilename: backupFilename,
             bookmark: try? standardized.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),

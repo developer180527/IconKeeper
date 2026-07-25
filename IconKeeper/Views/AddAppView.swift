@@ -9,6 +9,8 @@ import SwiftUI
 
 struct AddAppView: View {
     var initialAppURL: URL?
+    /// Extra items when the sheet was opened by dropping several at once.
+    var additionalURLs: [URL] = []
 
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -18,9 +20,13 @@ struct AddAppView: View {
         case library(IconLibraryItem)
     }
 
-    @State private var appURL: URL?
+    /// One or more apps/folders to protect. Multiple items share one icon,
+    /// which is the batch-apply path.
+    @State private var itemURLs: [URL] = []
     @State private var iconChoice: IconChoice?
     @State private var errorMessage: String?
+
+    private var isBatch: Bool { itemURLs.count > 1 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,7 +45,7 @@ struct AddAppView: View {
             footer
         }
         .frame(width: 660)
-        .onAppear { appURL = initialAppURL }
+        .onAppear { if let initialAppURL { itemURLs = [initialAppURL] + additionalURLs } }
         .alert(
             "Couldn't Apply Icon",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }),
@@ -52,9 +58,11 @@ struct AddAppView: View {
 
     private var header: some View {
         VStack(spacing: 4) {
-            Text("Protect an App")
+            Text(isBatch ? "Protect \(itemURLs.count) Items" : "Protect an App or Folder")
                 .font(.title2.weight(.bold))
-            Text("Drop the app and the icon you want it to keep.")
+            Text(isBatch
+                 ? "All \(itemURLs.count) items will get the same icon."
+                 : "Drop the app or folder, and the icon you want it to keep.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -64,18 +72,18 @@ struct AddAppView: View {
 
     private var footer: some View {
         HStack {
-            if appURL != nil, iconChoice != nil {
-                Label("Original icon will be backed up automatically.", systemImage: "checkmark.shield")
+            if !itemURLs.isEmpty, iconChoice != nil {
+                Label("Original icons will be backed up automatically.", systemImage: "checkmark.shield")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button("Cancel", role: .cancel) { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Apply & Protect", action: apply)
+            Button(isBatch ? "Apply to \(itemURLs.count) & Protect" : "Apply & Protect", action: apply)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(appURL == nil || iconChoice == nil)
+                .disabled(itemURLs.isEmpty || iconChoice == nil)
         }
         .padding(16)
     }
@@ -83,33 +91,72 @@ struct AddAppView: View {
     // MARK: - App card
 
     private var appCard: some View {
-        DropZone(allowedExtensions: ["app"]) { urls in
-            if let url = urls.first { appURL = url }
+        // Apps and folders are both directories; regular files are rejected
+        // because macOS discards their custom icon on every save.
+        DropZone(accepts: { IconManager.classify($0) != nil }) { urls in
+            itemURLs = urls
         } content: { targeted in
-            cardChrome(targeted: targeted, filled: appURL != nil) {
-                if let currentAppURL = appURL {
+            cardChrome(targeted: targeted, filled: !itemURLs.isEmpty) {
+                if isBatch {
+                    batchSummary
+                } else if let currentItemURL = itemURLs.first {
                     VStack(spacing: 10) {
-                        Image(nsImage: IconUtilities.currentIcon(forPath: currentAppURL.path))
+                        Image(nsImage: IconUtilities.currentIcon(forPath: currentItemURL.path))
                             .resizable().interpolation(.high)
                             .frame(width: 84, height: 84)
-                        Text(IconManager.displayName(of: currentAppURL))
+                        Text(IconManager.displayName(
+                            of: currentItemURL,
+                            kind: IconManager.classify(currentItemURL) ?? .app
+                        ))
                             .font(.headline)
                             .lineLimit(1)
                         Text("Current icon")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("Change…") {
-                            if let url = Panels.chooseApplication() { appURL = url }
-                        }
-                        .buttonStyle(.link)
+                        Button("Change…") { chooseItems() }
+                            .buttonStyle(.link)
                     }
                 } else {
-                    placeholder(symbol: "app.dashed", title: "Drop an app", subtitle: ".app bundle") {
-                        if let url = Panels.chooseApplication() { appURL = url }
-                    }
+                    placeholder(
+                        symbol: "square.dashed",
+                        title: "Drop apps or folders",
+                        subtitle: "one or many"
+                    ) { chooseItems() }
                 }
             }
         }
+    }
+
+    /// Compact preview when several items were dropped at once.
+    private var batchSummary: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: -18) {
+                ForEach(itemURLs.prefix(4), id: \.self) { url in
+                    Image(nsImage: IconUtilities.currentIcon(forPath: url.path))
+                        .resizable().interpolation(.high)
+                        .frame(width: 56, height: 56)
+                        .shadow(radius: 1)
+                }
+            }
+            Text("\(itemURLs.count) items")
+                .font(.headline)
+            Text(itemURLs.prefix(3)
+                .map { IconManager.displayName(of: $0, kind: IconManager.classify($0) ?? .app) }
+                .joined(separator: ", ")
+                + (itemURLs.count > 3 ? "…" : ""))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+            Button("Change…") { chooseItems() }
+                .buttonStyle(.link)
+        }
+    }
+
+    private func chooseItems() {
+        let picked = Panels.chooseItems()
+        if !picked.isEmpty { itemURLs = picked }
     }
 
     // MARK: - Icon card
@@ -217,17 +264,34 @@ struct AddAppView: View {
     // MARK: - Action
 
     private func apply() {
-        guard let appURL, let iconChoice else { return }
-        let source: IconSource
+        guard !itemURLs.isEmpty, let iconChoice else { return }
+        var source: IconSource
         switch iconChoice {
         case .file(let url): source = .file(url)
         case .library(let item): source = .library(item.id)
         }
-        do {
-            try store.addApp(bundleURL: appURL, icon: source)
+
+        var failures: [String] = []
+        for url in itemURLs {
+            do {
+                let added = try store.addApp(bundleURL: url, icon: source)
+                // After the first add, the icon lives in the library — reuse it
+                // so a batch imports the image once instead of once per item.
+                if let iconID = added.customIconID { source = .library(iconID) }
+            } catch {
+                let name = IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app)
+                failures.append("\(name): \(error.localizedDescription)")
+            }
+        }
+
+        if failures.isEmpty {
             dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
+        } else if failures.count == itemURLs.count {
+            errorMessage = failures.joined(separator: "\n\n")
+        } else {
+            // Partial success: the rest were protected, so report only what failed.
+            errorMessage = "Protected \(itemURLs.count - failures.count) of \(itemURLs.count) items.\n\n"
+                + failures.joined(separator: "\n\n")
         }
     }
 }

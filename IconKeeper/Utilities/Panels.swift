@@ -13,15 +13,26 @@ import UniformTypeIdentifiers
 enum Panels {
     /// Prompts the user to choose a `.app` bundle.
     static func chooseApplication() -> URL? {
+        chooseItems(allowsMultiple: false).first
+    }
+
+    /// Prompts the user to choose apps and/or folders to protect.
+    ///
+    /// Apps are directories too, so a single panel with `canChooseDirectories`
+    /// covers both; `treatsFilePackagesAsDirectories` stays off so an `.app` is
+    /// selected as one item rather than browsed into.
+    static func chooseItems(allowsMultiple: Bool = true) -> [URL] {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.application]
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowsMultipleSelection = allowsMultiple
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.prompt = "Choose App"
-        panel.message = "Select an application to protect."
-        return panel.runModal() == .OK ? panel.url : nil
+        panel.prompt = allowsMultiple ? "Choose" : "Choose App"
+        panel.message = allowsMultiple
+            ? "Select apps or folders to protect."
+            : "Select an application to protect."
+        return panel.runModal() == .OK ? panel.urls : []
     }
 
     /// Prompts the user to choose one or more icon image files.
