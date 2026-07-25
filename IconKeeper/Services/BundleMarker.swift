@@ -14,14 +14,14 @@
 import Foundation
 
 /// Metadata IconKeeper records on a managed bundle.
-struct ManagedMarker: Codable {
+nonisolated struct ManagedMarker: Codable {
     var appID: UUID
     var iconID: UUID
     var displayName: String
     var markedAt: Date
 }
 
-enum BundleMarker {
+nonisolated enum BundleMarker {
     private static let attribute = "com.iconkeeper.managed"
 
     static func write(_ marker: ManagedMarker, to bundleURL: URL) {

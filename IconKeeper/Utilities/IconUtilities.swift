@@ -8,7 +8,7 @@
 import AppKit
 import UniformTypeIdentifiers
 
-enum IconUtilities {
+nonisolated enum IconUtilities {
     /// File types accepted when picking / dropping a custom icon.
     static let acceptedIconTypes: [UTType] = {
         var types: [UTType] = [.icns, .png, .tiff, .jpeg]
@@ -132,7 +132,7 @@ enum IconUtilities {
 }
 
 /// Errors surfaced by icon operations.
-enum IconError: LocalizedError {
+nonisolated enum IconError: LocalizedError {
     case invalidIcon
     case applyFailed
     case removeFailed

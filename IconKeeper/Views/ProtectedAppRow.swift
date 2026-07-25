@@ -33,8 +33,20 @@ struct ProtectedAppRow: View {
 
             Spacer()
 
-            // Hidden when paused — the status badge already reads "Paused".
-            if health.overall != .unknown {
+            // A deliberate external change needs an answer, so offer it inline
+            // rather than burying the choice in the detail sheet.
+            if status == .externallyChanged {
+                Button("Keep Mine") { store.keepMyIcon(app.id) }
+                    .controlSize(.small)
+                Button("Adopt") { store.adoptCurrentIcon(app.id) }
+                    .controlSize(.small)
+                    .buttonStyle(.borderedProminent)
+            } else if status == .trashed {
+                Button("Remove") { store.removeApp(app.id) }
+                    .controlSize(.small)
+                    .help("Stop tracking this item — it's in the Trash")
+            } else if health.overall != .unknown {
+                // Hidden when paused — the status badge already reads "Paused".
                 HealthPill(level: health.overall)
             }
             StatusBadge(status: status)

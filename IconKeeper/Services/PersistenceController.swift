@@ -15,12 +15,14 @@ import Foundation
 /// config.lock        – advisory lock coordinating GUI writes vs agent reads
 /// Library/           – imported custom icon files
 /// Backups/           – captured original icons (PNG)
+/// Renders/           – how macOS rendered our icon at apply time (drift reference)
 /// AgentEvents/       – one file per background-agent batch (drained by GUI)
 /// ```
 struct PersistenceController {
     let rootURL: URL
     let libraryURL: URL
     let backupsURL: URL
+    let rendersURL: URL
     let configURL: URL
     let configLockURL: URL
     let agentEventsDirURL: URL
@@ -33,6 +35,7 @@ struct PersistenceController {
         rootURL = appSupport.appendingPathComponent("IconKeeper", isDirectory: true)
         libraryURL = rootURL.appendingPathComponent("Library", isDirectory: true)
         backupsURL = rootURL.appendingPathComponent("Backups", isDirectory: true)
+        rendersURL = rootURL.appendingPathComponent("Renders", isDirectory: true)
         configURL = rootURL.appendingPathComponent("config.json", isDirectory: false)
         configLockURL = rootURL.appendingPathComponent("config.lock", isDirectory: false)
         agentEventsDirURL = rootURL.appendingPathComponent("AgentEvents", isDirectory: true)
@@ -40,7 +43,7 @@ struct PersistenceController {
     }
 
     private func createDirectoriesIfNeeded() {
-        for dir in [rootURL, libraryURL, backupsURL, agentEventsDirURL] {
+        for dir in [rootURL, libraryURL, backupsURL, rendersURL, agentEventsDirURL] {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }
@@ -66,6 +69,18 @@ struct PersistenceController {
 
     func backupFileURL(for filename: String) -> URL {
         backupsURL.appendingPathComponent(filename, isDirectory: false)
+    }
+
+    /// Where we keep a snapshot of how macOS *rendered* an item's icon right
+    /// after we applied it. Drift is judged against this, not against the raw
+    /// library asset — macOS composites a folder's icon differently from the
+    /// source file, so comparing to the source reports permanent false drift.
+    func renderFileURL(for filename: String) -> URL {
+        rendersURL.appendingPathComponent(filename, isDirectory: false)
+    }
+
+    func removeRender(filename: String) {
+        try? fileManager.removeItem(at: renderFileURL(for: filename))
     }
 
     // MARK: - State

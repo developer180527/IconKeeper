@@ -12,6 +12,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case library
     case activity
     case settings
+    case developer
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .library: "Icon Library"
         case .activity: "Activity"
         case .settings: "Settings"
+        case .developer: "Developer"
         }
     }
 
@@ -30,6 +32,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .library: "photo.on.rectangle.angled"
         case .activity: "clock.arrow.circlepath"
         case .settings: "gearshape.fill"
+        case .developer: "ladybug.fill"
         }
     }
 }
@@ -42,7 +45,7 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section("IconKeeper") {
-                    ForEach(SidebarSection.allCases) { section in
+                    ForEach(SidebarSection.allCases.filter { $0 != .developer || store.developerModeEnabled }) { section in
                         Label(section.title, systemImage: section.symbol)
                             .tag(section)
                     }
@@ -59,6 +62,7 @@ struct ContentView: View {
             case .library: IconLibraryView()
             case .activity: ActivityView()
             case .settings: SettingsView()
+            case .developer: DeveloperView()
             }
         }
         .frame(minWidth: 880, minHeight: 600)

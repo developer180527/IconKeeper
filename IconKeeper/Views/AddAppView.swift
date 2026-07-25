@@ -25,6 +25,7 @@ struct AddAppView: View {
     @State private var itemURLs: [URL] = []
     @State private var iconChoice: IconChoice?
     @State private var errorMessage: String?
+    @State private var batchTask: Task<Void, Never>?
 
     private var isBatch: Bool { itemURLs.count > 1 }
 
@@ -45,6 +46,12 @@ struct AddAppView: View {
             footer
         }
         .frame(width: 660)
+        .overlay {
+            if store.isBatchRunning {
+                Color.black.opacity(0.25)
+                overlayContent
+            }
+        }
         .onAppear { if let initialAppURL { itemURLs = [initialAppURL] + additionalURLs } }
         .alert(
             "Couldn't Apply Icon",
@@ -265,33 +272,56 @@ struct AddAppView: View {
 
     private func apply() {
         guard !itemURLs.isEmpty, let iconChoice else { return }
-        var source: IconSource
+        let source: IconSource
         switch iconChoice {
         case .file(let url): source = .file(url)
         case .library(let item): source = .library(item.id)
         }
 
-        var failures: [String] = []
-        for url in itemURLs {
-            do {
-                let added = try store.addApp(bundleURL: url, icon: source)
-                // After the first add, the icon lives in the library — reuse it
-                // so a batch imports the image once instead of once per item.
-                if let iconID = added.customIconID { source = .library(iconID) }
-            } catch {
-                let name = IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app)
-                failures.append("\(name): \(error.localizedDescription)")
+        let total = itemURLs.count
+        batchTask = Task {
+            let failures = await store.addItems(urls: itemURLs, icon: source)
+            let cancelled = Task.isCancelled
+            batchTask = nil
+
+            if failures.isEmpty {
+                dismiss()
+            } else if failures.count == total, !cancelled {
+                errorMessage = failures.joined(separator: "\n\n")
+            } else {
+                // Partial run: say plainly how much actually landed.
+                let done = store.batchCompleted - failures.count
+                errorMessage = (cancelled ? "Stopped after protecting" : "Protected")
+                    + " \(done) of \(total) items.\n\n"
+                    + failures.joined(separator: "\n\n")
             }
         }
+    }
 
-        if failures.isEmpty {
-            dismiss()
-        } else if failures.count == itemURLs.count {
-            errorMessage = failures.joined(separator: "\n\n")
-        } else {
-            // Partial success: the rest were protected, so report only what failed.
-            errorMessage = "Protected \(itemURLs.count - failures.count) of \(itemURLs.count) items.\n\n"
-                + failures.joined(separator: "\n\n")
+    /// Progress overlay shown while a batch runs, with a way out.
+    private var overlayContent: some View {
+        VStack(spacing: 14) {
+            ProgressView(
+                value: Double(store.batchCompleted),
+                total: Double(max(store.batchTotal, 1))
+            )
+            .progressViewStyle(.linear)
+            .frame(width: 260)
+
+            Text("Applying icon — \(store.batchCompleted) of \(store.batchTotal)")
+                .font(.callout.weight(.medium))
+            Text(store.batchCurrentName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(width: 260)
+
+            Button("Stop", role: .destructive) { batchTask?.cancel() }
+                .controlSize(.large)
         }
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(radius: 20)
     }
 }

@@ -12,7 +12,7 @@ import Foundation
 /// The actual icon bytes live as a file (named `filename`) inside the
 /// library directory managed by `PersistenceController`; the model only
 /// records metadata so configs stay portable.
-struct IconLibraryItem: Identifiable, Codable, Hashable {
+nonisolated struct IconLibraryItem: Identifiable, Codable, Hashable {
     let id: UUID
 
     /// Display name shown in the library grid.

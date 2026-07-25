@@ -104,6 +104,8 @@ struct SettingsView: View {
                 Button("Scan for existing icons") { store.discoverOrphans(); showDiscovery = true }
                 Button("Restore all original icons", role: .destructive) { showRestoreAllConfirm = true }
                     .disabled(store.apps.isEmpty)
+                Button("Reset reapply statistics") { store.resetDriftStatistics() }
+                    .disabled(store.apps.isEmpty)
                 Button("Reveal data in Finder") { store.revealDataInFinder() }
             }
             .confirmationDialog(
@@ -120,6 +122,13 @@ struct SettingsView: View {
                 LabeledContent("Protected apps", value: "\(store.apps.count)")
                 LabeledContent("Library icons", value: "\(store.library.count)")
                 Text("IconKeeper runs outside the App Sandbox so it can write custom icons into other apps and watch them for updates. System apps protected by macOS (SIP) can't be modified.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Developer") {
+                Toggle("Developer Mode", isOn: $store.developerModeEnabled)
+                Text("Adds a Developer section showing live engine internals — event volume, verification and reapply rates, and the per-item drift scores protection decisions are made on.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

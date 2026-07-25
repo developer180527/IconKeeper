@@ -18,6 +18,13 @@ enum IconSource {
 /// A bundle that carries IconKeeper's marker but isn't in the current config —
 /// e.g. the config was wiped but the customized apps still exist. Surfaced so
 /// the user can re-adopt or restore them.
+/// Result of preparing one item during a batch, carrying a ready-made record
+/// or a human-readable reason it couldn't be protected.
+enum PreparedItem: Sendable {
+    case success(ProtectedApp)
+    case failure(String)
+}
+
 struct DiscoveredApp: Identifiable, Hashable {
     let id: String // the resolved bundle path
     let bundlePath: String
@@ -104,13 +111,86 @@ final class AppStore {
     /// Whether the launchd background agent is currently installed.
     var backgroundAgentInstalled: Bool { LaunchAgentManager.isEnabled }
 
+    /// Reveals the Developer section, which exposes live engine internals.
+    var developerModeEnabled: Bool {
+        didSet { defaults.set(developerModeEnabled, forKey: Keys.developerMode) }
+    }
+
     // MARK: - Private
 
     private let persistence = PersistenceController()
     private let monitor = AppMonitor()
     private let defaults = UserDefaults.standard
-    private var imageCache: [String: NSImage] = [:]
+    /// Decoded-image cache.
+    ///
+    /// `NSCache` rather than a Dictionary because this holds *per-item* files —
+    /// render references and 1024px original backups — so an unbounded map grows
+    /// with the library: a sweep over a thousand items would pin ~65 MB of render
+    /// references alone, and browsing backups far more. NSCache caps the count
+    /// and evicts automatically under memory pressure.
+    private let imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 240 // comfortably covers visible rows + the icon library
+        return cache
+    }()
     private var hasStartedMonitoring = false
+
+    /// Pixel size used for BOTH capturing an item's render reference and
+    /// comparing against it. These must match: an icon carries different
+    /// artwork per size, so capturing at 128 and comparing at 32 pits the
+    /// icon's dedicated 32px art against a downscale of its 128px art — a
+    /// systematic difference of roughly 20, right at the drift threshold.
+    static let renderReferenceSize = 128
+
+    /// Memoized health per item.
+    ///
+    /// `health(for:)` reads the disk and renders + pixel-compares icons, and it
+    /// is called from row bodies — so without this it runs for every visible row
+    /// on *every* render pass, which makes scrolling a large list crawl. Entries
+    /// are dropped explicitly whenever something that health depends on changes.
+    private var healthCache: [UUID: IconHealth] = [:]
+
+    /// The in-flight sweep, so a new one supersedes it instead of piling up.
+    private var sweepTask: Task<Void, Never>?
+
+    /// True while a full sweep is working through the list.
+    private(set) var isSweeping = false
+
+    /// Health level *only if already memoized*. For view code that runs during
+    /// layout and must never trigger disk reads or icon comparisons.
+    func cachedHealthLevel(for appID: UUID) -> HealthLevel? {
+        healthCache[appID]?.overall
+    }
+
+    /// Drops the memoized health for one item (or all of them).
+    func invalidateHealth(_ appID: UUID? = nil) {
+        if let appID {
+            healthCache[appID] = nil
+        } else {
+            healthCache.removeAll()
+        }
+    }
+    /// Timestamps of recent automatic reapplies per item, used to break runaway
+    /// loops: applying an icon bumps the item's mtime, which fires FSEvents,
+    /// which re-verifies — so a verifier that wrongly reports drift will reapply
+    /// forever. Past the limit we stop and surface the problem instead.
+    private var recentAutoReapplies: [UUID: [Date]] = [:]
+    private static let autoReapplyLimit = 5
+    private static let autoReapplyWindow: TimeInterval = 60
+
+    /// Live internals, surfaced by Developer Mode.
+    private(set) var stats = EngineStats()
+
+    /// Last measured drift score per item (Developer Mode).
+    private(set) var lastDriftScore: [UUID: Double] = [:]
+
+    /// Items currently suppressed by the loop guard.
+    private(set) var loopGuarded: Set<UUID> = []
+
+    /// Items where a different custom icon was applied outside IconKeeper,
+    /// awaiting the user's decision instead of being silently overwritten.
+    private(set) var externallyChangedIcon: [UUID: Date] = [:]
+
     /// Last time each app drifted to its *genuine* icon — used to notice a user
     /// repeatedly removing an icon by hand (vs. a one-off update).
     private var lastGenuineDrift: [UUID: Date] = [:]
@@ -120,6 +200,7 @@ final class AppStore {
         static let notifications = "notificationsEnabled"
         static let autoReapply = "autoReapplyEnabled"
         static let agentInterval = "agentSweepInterval"
+        static let developerMode = "developerModeEnabled"
     }
 
     // MARK: - Lifecycle
@@ -131,6 +212,7 @@ final class AppStore {
         notificationsEnabled = (defaults.object(forKey: Keys.notifications) as? Bool) ?? true
         autoReapplyEnabled = (defaults.object(forKey: Keys.autoReapply) as? Bool) ?? true
         agentSweepInterval = (defaults.object(forKey: Keys.agentInterval) as? Double) ?? 600
+        developerModeEnabled = (defaults.object(forKey: Keys.developerMode) as? Bool) ?? false
         launchAtLogin = LoginItemManager.isEnabled
         backgroundProtectionEnabled = LaunchAgentManager.isEnabled
 
@@ -142,7 +224,10 @@ final class AppStore {
         NotificationManager.shared.isEnabled = notificationsEnabled
         monitor.updateInterval(monitoringInterval)
         monitor.onChange = { [weak self] paths, fullScan in
-            if fullScan { self?.sweepAll() } else { self?.verifyChangedPaths(paths) }
+            guard let self else { return }
+            self.stats.fsEventBatches += 1
+            self.stats.fsEventPaths += paths.count
+            if fullScan { self.sweepAll() } else { self.verifyChangedPaths(paths) }
         }
 
         recomputeAllStatuses()
@@ -223,11 +308,209 @@ final class AppStore {
         )
         apps.append(app)
         writeMarker(for: app, at: standardized)
+        captureRenderReference(for: app.id, at: standardized)
         runtimeStatus[app.id] = .protected
         log(.added, app: app.displayName, message: "Added and protected with “\(item.name)”.")
         persist()
         monitor.syncWatchers(for: apps)
         return app
+    }
+
+    // MARK: - Batch registration
+
+    /// Live progress for a running batch, observed by the UI.
+    private(set) var batchTotal = 0
+    private(set) var batchCompleted = 0
+    private(set) var batchCurrentName = ""
+    private(set) var isBatchRunning = false
+
+    /// Registers many items with one shared icon.
+    ///
+    /// Unlike calling `addApp` in a loop, this writes the config and rebuilds
+    /// the file-system watchers **once** at the end rather than per item —
+    /// doing that per item is quadratic and, worse, each watcher rebuild
+    /// re-triggers verification of everything already added. The per-item disk
+    /// work runs off the main actor so the window stays responsive, and the
+    /// whole run is cancellable.
+    @discardableResult
+    func addItems(urls: [URL], icon: IconSource) async -> [String] {
+        guard !urls.isEmpty else { return [] }
+
+        // Import/convert the icon once; every item then reuses the library copy.
+        let item: IconLibraryItem
+        do {
+            item = try resolveLibraryItem(for: icon)
+        } catch {
+            return ["Couldn't prepare the icon: \(error.localizedDescription)"]
+        }
+        let iconURL = persistence.libraryFileURL(for: item.filename)
+
+        isBatchRunning = true
+        batchTotal = urls.count
+        batchCompleted = 0
+        defer {
+            isBatchRunning = false
+            batchCurrentName = ""
+        }
+
+        let alreadyTracked = Set(apps.map(\.bundlePath))
+        var failures: [String] = []
+        var parents: Set<String> = []
+        // Collected and published in one go: appending to `apps` per item makes
+        // SwiftUI re-render the dashboard list, and every visible row recomputes
+        // `health(for:)` — which renders and pixel-compares icons. Publishing
+        // once turns that from work-per-item back into work-once.
+        var newApps: [ProtectedApp] = []
+
+        for url in urls {
+            if Task.isCancelled { break }
+
+            let standardized = url.standardizedFileURL
+            batchCurrentName = standardized.lastPathComponent
+
+            if alreadyTracked.contains(standardized.path) {
+                batchCompleted += 1
+                continue
+            }
+
+            let appID = UUID()
+            let backupURL = persistence.backupFileURL(for: "\(appID.uuidString).png")
+
+            // Disk + icon work off the main actor, so the UI keeps drawing.
+            let outcome = await Task.detached(priority: .userInitiated) {
+                Self.prepareItem(url: standardized, iconURL: iconURL, appID: appID, backupURL: backupURL)
+            }.value
+
+            switch outcome {
+            case .failure(let message):
+                failures.append(message)
+            case .success(var app):
+                app.customIconID = item.id
+                writeMarker(for: app, at: standardized)
+                newApps.append(app)
+                parents.insert(standardized.deletingLastPathComponent().path)
+            }
+            batchCompleted += 1
+        }
+
+        if !newApps.isEmpty {
+            // Everything observable changes once, so the list lays out once.
+            apps.append(contentsOf: newApps)
+            for app in newApps {
+                runtimeStatus[app.id] = .protected
+                captureRenderReference(for: app.id, at: app.bundleURL)
+            }
+            let added = newApps.count
+            log(.added, app: "Batch", message: "Protected \(added) item\(added == 1 ? "" : "s") with “\(item.name)”.")
+            persist()
+            monitor.syncWatchers(for: apps)
+            IconManager.noteDirectoriesChanged(parents)
+        }
+        return failures
+    }
+
+    /// The per-item disk work, safe to run off the main actor.
+    private nonisolated static func prepareItem(
+        url: URL, iconURL: URL, appID: UUID, backupURL: URL
+    ) -> PreparedItem {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return .failure("\(url.lastPathComponent): couldn't be found.")
+        }
+        guard let kind = IconManager.classify(url) else {
+            return .failure("\(url.lastPathComponent): \(IconError.unsupportedItem.localizedDescription)")
+        }
+        let name = IconManager.displayName(of: url, kind: kind)
+
+        // Capture the original before changing anything.
+        var backupFilename: String?
+        if (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: backupURL)) != nil {
+            backupFilename = backupURL.lastPathComponent
+        }
+
+        do {
+            // Parent directories are notified once, after the whole batch.
+            try IconManager.applyIcon(at: iconURL, to: url, notesParent: false)
+        } catch {
+            return .failure("\(name): \(error.localizedDescription)")
+        }
+
+        return .success(ProtectedApp(
+            id: appID,
+            bundlePath: url.path,
+            kind: kind,
+            bundleIdentifier: kind == .app ? IconManager.bundleIdentifier(of: url) : nil,
+            displayName: name,
+            customIconID: nil, // assigned by the caller
+            originalIconBackupFilename: backupFilename,
+            bookmark: try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+            isProtectionEnabled: true,
+            lastAppliedDate: Date()
+        ))
+    }
+
+
+    // MARK: - Drift reference
+
+    /// Records how macOS renders the item's icon *now* (just after we applied
+    /// it). Verification compares against this instead of the raw library asset.
+    ///
+    /// This is the fix for a permanent reapply loop: macOS composites a folder's
+    /// custom icon differently from the source `.icns`, so the source comparison
+    /// scored every folder ~40 against a threshold of 20 — permanently "drifted",
+    /// reapplied forever.
+    @discardableResult
+    private func captureRenderReference(for appID: UUID, at url: URL) -> String? {
+        guard let index = apps.firstIndex(where: { $0.id == appID }) else { return nil }
+        let filename = apps[index].appliedRenderFilename ?? "\(appID.uuidString).png"
+        let dest = persistence.renderFileURL(for: filename)
+        guard (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: dest, pixelSize: Self.renderReferenceSize)) != nil
+        else { return nil }
+        apps[index].appliedRenderFilename = filename
+        imageCache.removeObject(forKey: dest.path as NSString)
+        return filename
+    }
+
+    /// The stored "this is what it should look like" render, if we have one.
+    func renderReferenceImage(_ app: ProtectedApp) -> NSImage? {
+        guard let filename = app.appliedRenderFilename else { return nil }
+        return cachedImage(at: persistence.renderFileURL(for: filename))
+    }
+
+    /// How far the item's current icon is from its reference (0 = identical).
+    /// `nil` when there is no reference yet. Surfaced by Developer Mode.
+    func driftScore(for app: ProtectedApp) -> Double? {
+        guard app.bundleExists, let reference = renderReferenceImage(app) else { return nil }
+        return IconUtilities.meanAbsoluteDifference(
+            IconManager.captureCurrentIcon(of: app.bundleURL), reference,
+            pixelSize: Self.renderReferenceSize
+        )
+    }
+
+
+    /// Returns false when this item has auto-reapplied too often too fast —
+    /// a sign the verifier and the OS disagree rather than real drift.
+    private func allowAutomaticReapply(_ appID: UUID, name: String) -> Bool {
+        // Once tripped, stay stopped. Otherwise the window simply expires and
+        // the item resumes bursting five reapplies a minute, forever.
+        if loopGuarded.contains(appID) { return false }
+        let now = Date()
+        var recent = (recentAutoReapplies[appID] ?? []).filter {
+            now.timeIntervalSince($0) < Self.autoReapplyWindow
+        }
+        guard recent.count < Self.autoReapplyLimit else {
+            if !loopGuarded.contains(appID) {
+                loopGuarded.insert(appID)
+                runtimeStatus[appID] = .failed("Icon keeps reverting — protection paused for this item")
+                log(.failed, app: name, message:
+                    "Stopped reapplying after \(Self.autoReapplyLimit) attempts in a minute. "
+                    + "The icon on disk isn't matching what IconKeeper expects.")
+                stats.loopGuardTrips += 1
+            }
+            return false
+        }
+        recent.append(now)
+        recentAutoReapplies[appID] = recent
+        return true
     }
 
     /// Stamps IconKeeper's recovery marker onto a bundle it manages.
@@ -243,6 +526,16 @@ final class AppStore {
 
     /// Manually (re)applies the assigned icon to an app.
     func reapply(_ appID: UUID, automatic: Bool = false) {
+        invalidateHealth(appID)
+        if automatic {
+            stats.autoReapplies += 1
+        } else {
+            // An explicit reapply is the user vouching for this item: clear the
+            // guard and its history so protection can resume normally.
+            stats.manualReapplies += 1
+            loopGuarded.remove(appID)
+            recentAutoReapplies[appID] = nil
+        }
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         let app = apps[index]
         guard let iconID = app.customIconID,
@@ -260,6 +553,8 @@ final class AppStore {
         do {
             try IconManager.applyIcon(at: iconURL, to: bundleURL)
             writeMarker(for: apps[index], at: bundleURL)
+            captureRenderReference(for: appID, at: bundleURL)
+            externallyChangedIcon[appID] = nil
             apps[index].lastAppliedDate = Date()
             if automatic {
                 apps[index].reapplyCount += 1
@@ -276,12 +571,15 @@ final class AppStore {
         } catch {
             runtimeStatus[appID] = .failed(error.localizedDescription)
             log(.failed, app: app.displayName, message: error.localizedDescription)
-            lastErrorMessage = error.localizedDescription
+            // Only interrupt for something the user just asked for. A sweep over
+            // hundreds of items must not throw a modal per failure.
+            if !automatic { lastErrorMessage = error.localizedDescription }
         }
     }
 
     /// Restores the app's original icon and pauses protection so it sticks.
     func restoreOriginal(_ appID: UUID) {
+        invalidateHealth(appID)
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         let app = apps[index]
         guard app.bundleExists else {
@@ -304,6 +602,9 @@ final class AppStore {
 
     /// Enables/disables protection for an app.
     func setProtection(_ appID: UUID, enabled: Bool) {
+        invalidateHealth(appID)
+        loopGuarded.remove(appID)
+        recentAutoReapplies[appID] = nil
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         apps[index].isProtectionEnabled = enabled
         persist()
@@ -318,10 +619,14 @@ final class AppStore {
     /// Removes an app from IconKeeper. Leaves the currently-applied icon in
     /// place (use Restore first to revert).
     func removeApp(_ appID: UUID) {
+        invalidateHealth(appID)
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         let app = apps[index]
         if let backup = app.originalIconBackupFilename {
             persistence.removeBackup(filename: backup)
+        }
+        if let render = app.appliedRenderFilename {
+            persistence.removeRender(filename: render)
         }
         BundleMarker.remove(from: app.bundleURL)
         apps.remove(at: index)
@@ -333,6 +638,7 @@ final class AppStore {
 
     /// Assigns a (new or existing) icon to an app and applies it.
     func assignIcon(_ icon: IconSource, to appID: UUID) throws {
+        invalidateHealth(appID)
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         let item = try resolveLibraryItem(for: icon)
         apps[index].customIconID = item.id
@@ -354,9 +660,21 @@ final class AppStore {
 
     /// Called by the monitor when a specific bundle changed on disk.
     func verifyAndReapplyIfNeeded(appID: UUID) {
+        invalidateHealth(appID)
+        stats.verifications += 1
         guard let app = apps.first(where: { $0.id == appID }) else { return }
         guard app.isProtectionEnabled else {
             runtimeStatus[appID] = .paused
+            return
+        }
+        // In the Trash: pause rather than follow it there and keep writing
+        // icons into the Trash (and racing an "Empty Trash").
+        if trashedURL(for: app) != nil {
+            if runtimeStatus[appID] != .trashed {
+                log(.drifted, app: app.displayName,
+                    message: "Moved to the Trash — protection paused. Restore it, or remove it from IconKeeper.")
+            }
+            runtimeStatus[appID] = .trashed
             return
         }
         guard let bundleURL = resolveURL(for: appID) else {
@@ -369,11 +687,24 @@ final class AppStore {
         // icon exists (which a user/third-party override would also satisfy).
         let hasCustomIcon = IconManager.isCustomIconApplied(at: bundleURL)
         let applied: Bool
-        if let expected = libraryIconImage(iconID) {
-            applied = hasCustomIcon && IconUtilities.iconsMatch(IconManager.captureCurrentIcon(of: bundleURL), expected)
+        if !hasCustomIcon {
+            applied = false
+        } else if let reference = renderReferenceImage(app) {
+            // Compare rendering-to-rendering. Comparing to the raw library asset
+            // is invalid: macOS composites folder icons differently from source.
+            let score = IconUtilities.meanAbsoluteDifference(
+                IconManager.captureCurrentIcon(of: bundleURL), reference,
+                pixelSize: Self.renderReferenceSize)
+            lastDriftScore[appID] = score
+            applied = score <= 20
         } else {
-            applied = hasCustomIcon
+            // Legacy record with no reference yet: trust the Icon\r file rather
+            // than guessing, and capture a reference so future checks are exact.
+            applied = true
+            captureRenderReference(for: appID, at: bundleURL)
+            persist()
         }
+        _ = iconID
 
         if applied {
             runtimeStatus[appID] = .protected
@@ -382,13 +713,30 @@ final class AppStore {
             // right now (an update or removal) — capture it as the refreshed
             // original before we override it again. We skip this when a different
             // custom icon is present, so we never record a third party's icon.
-            if !hasCustomIcon {
-                refreshOriginalBackup(appID: appID, bundleURL: bundleURL)
-                nudgeIfRepeatedRemoval(appID: appID, name: app.displayName)
+            if hasCustomIcon {
+                // A *different* custom icon is in place. Something deliberately
+                // set it — the user in Finder, or another tool — so overwriting
+                // silently would destroy an intentional choice. Ask instead.
+                if externallyChangedIcon[appID] == nil {
+                    externallyChangedIcon[appID] = Date()
+                    log(.drifted, app: app.displayName,
+                        message: "A different icon was applied outside IconKeeper. Choose whether to keep yours or adopt the new one.")
+                    NotificationManager.shared.notify(
+                        title: "\(app.displayName)'s icon was changed",
+                        body: "IconKeeper left it alone. Open IconKeeper to keep your icon or adopt the new one."
+                    )
+                }
+                runtimeStatus[appID] = .externallyChanged
+                return
             }
-            log(.drifted, app: app.displayName, message: "Icon no longer matches your choice (update or external change).")
+
+            // The icon is genuinely gone — an update or a removal. This is the
+            // case protection exists for, so restore it.
+            refreshOriginalBackup(appID: appID, bundleURL: bundleURL)
+            nudgeIfRepeatedRemoval(appID: appID, name: app.displayName)
+            log(.drifted, app: app.displayName, message: "Icon was reset (update or removal).")
             runtimeStatus[appID] = .drifted
-            if autoReapplyEnabled {
+            if autoReapplyEnabled, allowAutomaticReapply(appID, name: app.displayName) {
                 reapply(appID, automatic: true)
             }
         }
@@ -398,12 +746,13 @@ final class AppStore {
     /// backup. Called only when the genuine icon is actually showing, so it
     /// tracks official redesigns without archiving every past version.
     private func refreshOriginalBackup(appID: UUID, bundleURL: URL) {
+        invalidateHealth(appID)
         guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
         let filename = apps[index].originalIconBackupFilename ?? "\(appID.uuidString).png"
         let url = persistence.backupFileURL(for: filename)
         guard (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: bundleURL), to: url)) != nil else { return }
         apps[index].originalIconBackupFilename = filename
-        imageCache[url.path] = nil // overwritten on disk — drop the stale cache
+        imageCache.removeObject(forKey: url.path as NSString) // overwritten on disk
         persist()
     }
 
@@ -423,6 +772,9 @@ final class AppStore {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
                FileManager.default.fileExists(atPath: url.path) {
+                // A bookmark follows an item into the Trash. Don't rewrite the
+                // record to a Trash path — the caller reports `.trashed` instead.
+                guard !IconManager.isInTrash(url) else { return nil }
                 relocate(index: index, to: url, refreshBookmark: stale)
                 return url
             }
@@ -474,6 +826,66 @@ final class AppStore {
     func restoreAllOriginals() {
         for id in apps.map(\.id) {
             restoreOriginal(id)
+        }
+    }
+
+    /// Zeroes the automatic-reapply counters and clears any loop guards.
+    ///
+    /// The reapply-loop bug inflated these counts into the hundreds, which trips
+    /// the "Stability" health check (it warns above 10) and makes healthy items
+    /// read as problems. The counts are meaningless after that, so this offers a
+    /// clean slate rather than leaving corrupt numbers on screen.
+    func resetDriftStatistics() {
+        for index in apps.indices { apps[index].reapplyCount = 0 }
+        loopGuarded.removeAll()
+        recentAutoReapplies.removeAll()
+        lastDriftScore.removeAll()
+        stats = EngineStats()
+        invalidateHealth()
+        log(.applied, app: "IconKeeper", message: "Reset reapply statistics for all items.")
+        persist()
+    }
+
+    /// The item's location if it is currently in the Trash, else `nil`.
+    func trashedURL(for app: ProtectedApp) -> URL? {
+        let current = app.bundleURL
+        if FileManager.default.fileExists(atPath: current.path), IconManager.isInTrash(current) {
+            return current
+        }
+        guard !FileManager.default.fileExists(atPath: current.path), let data = app.bookmark else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
+              FileManager.default.fileExists(atPath: url.path), IconManager.isInTrash(url) else { return nil }
+        return url
+    }
+
+    /// Keeps IconKeeper's icon, overwriting whatever was applied externally.
+    func keepMyIcon(_ appID: UUID) {
+        externallyChangedIcon[appID] = nil
+        reapply(appID)
+    }
+
+    /// Takes the icon someone else applied, adds it to the library, and keeps
+    /// protecting the item with that instead — the "you meant to do that" path.
+    func adoptCurrentIcon(_ appID: UUID) {
+        guard let app = apps.first(where: { $0.id == appID }),
+              let url = resolveURL(for: appID) else { return }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("IconKeeper-adopt-\(UUID().uuidString).png")
+        guard (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: tmp)) != nil else { return }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        do {
+            let item = try importIconFile(tmp)
+            guard let index = apps.firstIndex(where: { $0.id == appID }) else { return }
+            apps[index].customIconID = item.id
+            externallyChangedIcon[appID] = nil
+            captureRenderReference(for: appID, at: url)
+            runtimeStatus[appID] = .protected
+            invalidateHealth(appID)
+            log(.applied, app: app.displayName, message: "Adopted the icon that was applied outside IconKeeper.")
+            persist()
+        } catch {
+            lastErrorMessage = "Couldn't adopt that icon: \(error.localizedDescription)"
         }
     }
 
@@ -600,10 +1012,33 @@ final class AppStore {
         lastGenuineDrift[appID] = now
     }
 
-    /// Periodic sweep: re-verify every protected app.
+    /// Periodic sweep: re-verify every protected item.
+    ///
+    /// Runs as a yielding task rather than a straight loop: verification touches
+    /// the disk and compares rendered icons, so at hundreds or thousands of
+    /// items a synchronous pass would block the main thread for seconds. Yielding
+    /// every few items keeps the window drawing while it works through them.
     func sweepAll() {
-        for app in apps where app.isProtectionEnabled {
-            verifyAndReapplyIfNeeded(appID: app.id)
+        sweepTask?.cancel()
+        sweepTask = Task { [weak self] in
+            await self?.sweepAllYielding()
+        }
+    }
+
+    private func sweepAllYielding() async {
+        stats.sweeps += 1
+        isSweeping = true
+        defer { isSweeping = false }
+        let ids = apps.filter(\.isProtectionEnabled).map(\.id)
+        for (index, id) in ids.enumerated() {
+            if Task.isCancelled { return }
+            // The item may have been removed while we were yielding.
+            guard apps.contains(where: { $0.id == id }) else { continue }
+            verifyAndReapplyIfNeeded(appID: id)
+            // Warm the health memo here, on the yielding path, so rows scrolled
+            // into view later render from cache instead of hitting the disk.
+            if let app = apps.first(where: { $0.id == id }) { _ = health(for: app) }
+            if index % 8 == 7 { await Task.yield() }
         }
     }
 
@@ -701,6 +1136,8 @@ final class AppStore {
             restored += 1
             if app.isProtectionEnabled, app.bundleExists {
                 reapply(app.id)
+            } else if IconManager.isInTrash(app.bundleURL) {
+                runtimeStatus[app.id] = .trashed
             } else if !app.bundleExists {
                 runtimeStatus[app.id] = .missing
             }
@@ -753,6 +1190,13 @@ final class AppStore {
     /// Computes a transparent, multi-factor health report for an app. Cheap
     /// enough to call from view bodies (file existence + cached image checks).
     func health(for app: ProtectedApp) -> IconHealth {
+        if let cached = healthCache[app.id] { return cached }
+        let computed = computeHealth(for: app)
+        healthCache[app.id] = computed
+        return computed
+    }
+
+    private func computeHealth(for app: ProtectedApp) -> IconHealth {
         var checks: [HealthCheck] = []
         let bundleExists = app.bundleExists
 
@@ -774,9 +1218,17 @@ final class AppStore {
                 detail: "No custom icon is assigned to this app yet.",
                 criterion: appliedCriterion))
         } else {
-            let expected = libraryIconImage(app.customIconID)
             let hasCustom = IconManager.isCustomIconApplied(at: app.bundleURL)
-            let isOurs = expected.map { IconManager.isExpectedIconApplied(expected: $0, at: app.bundleURL) } ?? hasCustom
+            // Judge against the render reference, not the raw library asset —
+            // macOS composites a folder's icon differently from its source file.
+            let isOurs: Bool
+            if !hasCustom {
+                isOurs = false
+            } else if let score = driftScore(for: app) {
+                isOurs = score <= 20
+            } else {
+                isOurs = true // no reference yet; the Icon\r file is our best signal
+            }
 
             if isOurs {
                 checks.append(HealthCheck(
@@ -909,26 +1361,27 @@ final class AppStore {
 
     private func cachedImage(at url: URL) -> NSImage? {
         let key = url.path
-        if let cached = imageCache[key] { return cached }
+        if let cached = imageCache.object(forKey: key as NSString) { return cached }
         guard let image = NSImage(contentsOf: url) else { return nil }
-        imageCache[key] = image
+        imageCache.setObject(image, forKey: key as NSString)
         return image
     }
 
+    /// Cheap first-pass status for every item, run during `init`.
+    ///
+    /// Deliberately limited to two `stat` calls per item: no bookmark
+    /// resolution and no icon rendering/comparison. Those are what make a
+    /// thousand-item launch stall, and the yielding sweep in `startMonitoring`
+    /// refines every status (including relocation) moments later anyway.
     private func recomputeAllStatuses() {
         for app in apps {
             if !app.isProtectionEnabled {
                 runtimeStatus[app.id] = .paused
-            } else if let url = resolveURL(for: app.id) {
-                let applied: Bool
-                if let expected = libraryIconImage(app.customIconID) {
-                    applied = IconManager.isExpectedIconApplied(expected: expected, at: url)
-                } else {
-                    applied = IconManager.isCustomIconApplied(at: url)
-                }
-                runtimeStatus[app.id] = applied ? .protected : .drifted
-            } else {
+            } else if !app.bundleExists {
                 runtimeStatus[app.id] = .missing
+            } else {
+                runtimeStatus[app.id] = IconManager.isCustomIconApplied(at: app.bundleURL)
+                    ? .protected : .drifted
             }
         }
     }

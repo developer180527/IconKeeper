@@ -1,0 +1,13 @@
+Future features to add:
+If IconKeeper becomes a commercial-quality macOS utility, these would be compelling:
+*Automatic icon packs: Apply an entire themed icon set (e.g. dark, pastel, minimal) across all supported apps.
+*Cloud sync: Sync icon library and assignments through the user’s preferred storage.
+*History/rollback: Keep previous icon assignments so users can undo changes after experimenting.
+*Drag-and-drop browser extension: Drop an app onto IconKeeper to immediately customize it.
+*Quick Look previews: Preview icons at multiple Finder sizes before applying.
+*Smart collections: Group icons by style, color, or creator.
+*Import/export packages: Bundle icons and assignments into a portable archive.
+
+
+*Drop an app in IconKeeper to start editing / customizing the icon, the editor will pop up or a separate editor panel to edit icons. 
+* Need to add reassuring animations when clicking actionable button to assure that said action has been done/executed. 

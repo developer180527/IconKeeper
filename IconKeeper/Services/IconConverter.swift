@@ -16,7 +16,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-enum IconConverter {
+nonisolated enum IconConverter {
     /// An `.iconset` member: the Apple-mandated filename and its pixel size.
     private struct Slot {
         let name: String

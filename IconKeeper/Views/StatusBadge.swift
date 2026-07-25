@@ -14,6 +14,9 @@ extension AppStatus {
         case .applying, .drifted: .orange
         case .paused: .gray
         case .missing: .gray
+        case .trashed: .gray
+        // Needs a decision from the user, not an error.
+        case .externallyChanged: .blue
         case .failed: .red
         }
     }

@@ -14,7 +14,7 @@ import Foundation
 /// file inside the directory — so the whole engine treats them alike. They
 /// differ only in metadata (folders have no bundle identifier) and in how
 /// often they drift (apps get replaced by updates; folders rarely change).
-enum ItemKind: String, Codable, Hashable {
+nonisolated enum ItemKind: String, Codable, Hashable {
     case app
     case folder
 
@@ -38,7 +38,7 @@ enum ItemKind: String, Codable, Hashable {
 /// Only persistable data lives here. Transient, runtime state (current
 /// drift status, last error, in-flight work) is tracked separately by
 /// `AppStore` keyed on `id`, so this type stays a clean `Codable` value.
-struct ProtectedApp: Identifiable, Codable, Hashable {
+nonisolated struct ProtectedApp: Identifiable, Codable, Hashable {
     let id: UUID
 
     /// Absolute path to the `.app` bundle or folder, e.g. `/Applications/Foo.app`.
@@ -58,6 +58,11 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
 
     /// Filename (inside the Backups directory) of the captured original icon.
     var originalIconBackupFilename: String?
+
+    /// Filename (inside the Renders directory) holding how macOS rendered our
+    /// icon immediately after applying it. Drift is measured against this, since
+    /// the OS composites a folder's icon differently from the source asset.
+    var appliedRenderFilename: String?
 
     /// Bookmark to the bundle, which resolves across user moves/renames on the
     /// same volume. Used to relocate the app if `bundlePath` goes stale, so a
@@ -81,6 +86,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         displayName: String,
         customIconID: UUID? = nil,
         originalIconBackupFilename: String? = nil,
+        appliedRenderFilename: String? = nil,
         bookmark: Data? = nil,
         isProtectionEnabled: Bool = true,
         dateAdded: Date = Date(),
@@ -94,6 +100,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         self.displayName = displayName
         self.customIconID = customIconID
         self.originalIconBackupFilename = originalIconBackupFilename
+        self.appliedRenderFilename = appliedRenderFilename
         self.bookmark = bookmark
         self.isProtectionEnabled = isProtectionEnabled
         self.dateAdded = dateAdded
@@ -113,6 +120,7 @@ struct ProtectedApp: Identifiable, Codable, Hashable {
         displayName = try container.decode(String.self, forKey: .displayName)
         customIconID = try container.decodeIfPresent(UUID.self, forKey: .customIconID)
         originalIconBackupFilename = try container.decodeIfPresent(String.self, forKey: .originalIconBackupFilename)
+        appliedRenderFilename = try container.decodeIfPresent(String.self, forKey: .appliedRenderFilename)
         bookmark = try container.decodeIfPresent(Data.self, forKey: .bookmark)
         isProtectionEnabled = try container.decode(Bool.self, forKey: .isProtectionEnabled)
         dateAdded = try container.decode(Date.self, forKey: .dateAdded)
@@ -140,6 +148,12 @@ enum AppStatus: Equatable {
     case paused
     /// The bundle could not be found on disk.
     case missing
+    /// The item is sitting in the Trash — protection is paused rather than
+    /// following it there and writing icons into the Trash.
+    case trashed
+    /// A *different* custom icon is in place: someone deliberately changed it.
+    /// We don't overwrite that without asking.
+    case externallyChanged
     /// The last operation failed; carries a human-readable reason.
     case failed(String)
 
@@ -150,6 +164,8 @@ enum AppStatus: Equatable {
         case .drifted: "Restoring…"
         case .paused: "Paused"
         case .missing: "Missing"
+        case .trashed: "In Trash"
+        case .externallyChanged: "Icon changed"
         case .failed: "Error"
         }
     }
@@ -160,6 +176,8 @@ enum AppStatus: Equatable {
         case .applying, .drifted: "arrow.triangle.2.circlepath"
         case .paused: "pause.circle.fill"
         case .missing: "questionmark.circle.fill"
+        case .trashed: "trash.fill"
+        case .externallyChanged: "person.crop.circle.badge.questionmark"
         case .failed: "exclamationmark.triangle.fill"
         }
     }

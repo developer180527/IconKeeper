@@ -32,7 +32,7 @@ extension HealthLevel {
     var pillSymbol: String {
         switch self {
         case .ok: "heart.fill"
-        case .warning: "exclamationmark.heart.fill"
+        case .warning: "exclamationmark.triangle.fill"
         case .problem: "heart.slash.fill"
         case .unknown: "pause.circle.fill"
         }

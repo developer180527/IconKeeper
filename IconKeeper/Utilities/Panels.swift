@@ -10,6 +10,13 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Greys out anything that isn't an app bundle or a folder.
+private final class ItemPanelDelegate: NSObject, NSOpenSavePanelDelegate {
+    func panel(_ sender: Any, shouldEnable url: URL) -> Bool {
+        IconManager.classify(url) != nil
+    }
+}
+
 enum Panels {
     /// Prompts the user to choose a `.app` bundle.
     static func chooseApplication() -> URL? {
@@ -18,21 +25,26 @@ enum Panels {
 
     /// Prompts the user to choose apps and/or folders to protect.
     ///
-    /// Apps are directories too, so a single panel with `canChooseDirectories`
-    /// covers both; `treatsFilePackagesAsDirectories` stays off so an `.app` is
-    /// selected as one item rather than browsed into.
+    /// An `.app` is a *file package*, which the panel reports as a file rather
+    /// than a directory — so `canChooseFiles` must be on or apps are greyed
+    /// out. The delegate then narrows the selection back down to apps and
+    /// folders, leaving ordinary files disabled.
     static func chooseItems(allowsMultiple: Bool = true) -> [URL] {
+        let delegate = ItemPanelDelegate()
         let panel = NSOpenPanel()
-        panel.canChooseFiles = false
+        panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.treatsFilePackagesAsDirectories = false
         panel.allowsMultipleSelection = allowsMultiple
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.prompt = allowsMultiple ? "Choose" : "Choose App"
+        panel.delegate = delegate
+        panel.prompt = "Choose"
         panel.message = allowsMultiple
             ? "Select apps or folders to protect."
-            : "Select an application to protect."
-        return panel.runModal() == .OK ? panel.urls : []
+            : "Select an app or folder to protect."
+        let response = panel.runModal()
+        panel.delegate = nil // outlives the panel otherwise
+        return response == .OK ? panel.urls : []
     }
 
     /// Prompts the user to choose one or more icon image files.

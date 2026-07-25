@@ -41,6 +41,23 @@ struct ActivityView: View {
             }
         }
         .navigationTitle("Activity")
+        .toolbar {
+            ToolbarItemGroup {
+                Menu {
+                    Button("Copy as JSON", systemImage: "doc.on.doc") {
+                        Diagnostics.copyToPasteboard(Diagnostics.activityJSON(store.activity))
+                    }
+                    Button("Export as JSON…", systemImage: "square.and.arrow.up") {
+                        Diagnostics.exportToFile(
+                            Diagnostics.activityJSON(store.activity),
+                            defaultName: "IconKeeper Activity.json")
+                    }
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .disabled(store.activity.isEmpty)
+            }
+        }
     }
 
     private func color(for kind: ActivityEntry.Kind) -> Color {

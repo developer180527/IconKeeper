@@ -14,3 +14,6 @@ xcuserdata/
 
 # CI / release artifacts
 *.zip
+*.dmg
+# IconKeeper's own custom-folder-icon marker on this repo
+Icon?
