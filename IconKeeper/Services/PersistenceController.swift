@@ -18,7 +18,7 @@ import Foundation
 /// Renders/           – how macOS rendered our icon at apply time (drift reference)
 /// AgentEvents/       – one file per background-agent batch (drained by GUI)
 /// ```
-struct PersistenceController {
+nonisolated struct PersistenceController: Sendable {
     let rootURL: URL
     let libraryURL: URL
     let backupsURL: URL
@@ -27,10 +27,10 @@ struct PersistenceController {
     let configLockURL: URL
     let agentEventsDirURL: URL
 
-    private let fileManager = FileManager.default
+    private var fileManager: FileManager { .default }
 
     init() {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         rootURL = appSupport.appendingPathComponent("IconKeeper", isDirectory: true)
         libraryURL = rootURL.appendingPathComponent("Library", isDirectory: true)
@@ -97,7 +97,6 @@ struct PersistenceController {
     func save(_ state: PersistedState) {
         withConfigLock(LOCK_EX) {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             guard let data = try? encoder.encode(state) else { return }
             try? data.write(to: configURL, options: .atomic)

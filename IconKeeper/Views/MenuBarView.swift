@@ -2,7 +2,11 @@
 //  MenuBarView.swift
 //  IconKeeper
 //
-//  The menu bar companion: quick status, per-app reapply, and global actions.
+//  The menu bar companion: quick status, what needs attention, global actions.
+//
+//  Shows a summary and only the items needing attention (capped). It used to
+//  render every protected item in a non-lazy stack — at a thousand items that
+//  is a thousand rows re-laid-out on every change, even with the menu closed.
 //
 
 import SwiftUI
@@ -11,27 +15,33 @@ struct MenuBarView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.openWindow) private var openWindow
 
+    private static let maxRows = 30
+
     var body: some View {
+        let attention = store.index.lazy.filter(\.needsAttention).prefix(Self.maxRows)
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
 
-            if store.apps.isEmpty {
-                Text("No protected apps yet")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 18)
+            if store.index.isEmpty {
+                message("No protected items yet")
+            } else if attention.isEmpty {
+                message("All \(store.summary.total) items are in good shape")
             } else {
                 ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(store.apps) { app in
-                            row(for: app)
+                    LazyVStack(spacing: 2) {
+                        ForEach(Array(attention)) { entry in
+                            row(for: entry)
                         }
                     }
                     .padding(6)
                 }
                 .frame(maxHeight: 300)
+                if store.summary.needsAttention > Self.maxRows {
+                    Text("and \(store.summary.needsAttention - Self.maxRows) more — open IconKeeper to see all")
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.bottom, 6)
+                }
             }
 
             Divider()
@@ -41,15 +51,16 @@ struct MenuBarView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: store.driftedCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill")
+        let needs = store.summary.needsAttention
+        return HStack(spacing: 10) {
+            Image(systemName: needs > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill")
                 .font(.title3)
-                .foregroundStyle(store.driftedCount > 0 ? .orange : .green)
+                .foregroundStyle(needs > 0 ? .orange : .green)
             VStack(alignment: .leading, spacing: 1) {
                 Text("IconKeeper").font(.headline)
-                Text(store.driftedCount > 0
-                     ? "\(store.driftedCount) icon\(store.driftedCount == 1 ? "" : "s") need attention"
-                     : "\(store.protectedCount) app\(store.protectedCount == 1 ? "" : "s") protected")
+                Text(needs > 0
+                     ? "\(needs) item\(needs == 1 ? "" : "s") need attention"
+                     : "\(store.summary.protectionEnabled) item\(store.summary.protectionEnabled == 1 ? "" : "s") protected")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -58,21 +69,28 @@ struct MenuBarView: View {
         .padding(12)
     }
 
-    private func row(for app: ProtectedApp) -> some View {
-        let status = store.status(for: app)
-        return HStack(spacing: 9) {
-            if let image = store.libraryIconImage(app.customIconID) {
+    private func message(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 18)
+    }
+
+    private func row(for entry: ItemIndexEntry) -> some View {
+        HStack(spacing: 9) {
+            if let image = store.libraryIconImage(entry.iconID) {
                 Image(nsImage: image).resizable().frame(width: 22, height: 22)
             } else {
-                StatusDot(status: status).frame(width: 22)
+                StatusDot(status: entry.status).frame(width: 22)
             }
             VStack(alignment: .leading, spacing: 1) {
-                Text(app.displayName).font(.callout).lineLimit(1)
-                Text(status.label).font(.caption2).foregroundStyle(status.color)
+                Text(entry.name).font(.callout).lineLimit(1)
+                Text(entry.status.label).font(.caption2).foregroundStyle(entry.status.color)
             }
             Spacer()
             Button {
-                store.reapply(app.id)
+                store.reapply(entry.id)
             } label: {
                 Image(systemName: "arrow.triangle.2.circlepath")
             }
@@ -89,7 +107,7 @@ struct MenuBarView: View {
             menuButton("Reapply All Icons", systemImage: "arrow.triangle.2.circlepath") {
                 store.reapplyAll()
             }
-            .disabled(store.apps.isEmpty)
+            .disabled(store.index.isEmpty)
 
             menuButton("Open IconKeeper", systemImage: "macwindow") {
                 NSApp.activate(ignoringOtherApps: true)

@@ -8,7 +8,7 @@
 import Foundation
 
 /// The complete document IconKeeper writes to `config.json`.
-struct PersistedState: Codable {
+nonisolated struct PersistedState: Codable, Sendable {
     var apps: [ProtectedApp]
     var library: [IconLibraryItem]
     var activity: [ActivityEntry]
@@ -20,7 +20,7 @@ struct PersistedState: Codable {
 
 /// A self-contained icon record that carries its bytes inline (base64) so a
 /// configuration can be moved between machines without separate icon files.
-struct ExportedIcon: Codable {
+nonisolated struct ExportedIcon: Codable, Sendable {
     var id: UUID
     var name: String
     var filename: String
@@ -28,7 +28,7 @@ struct ExportedIcon: Codable {
 }
 
 /// The shape produced by "Export Configuration…" and consumed by "Import".
-struct ExportedConfiguration: Codable {
+nonisolated struct ExportedConfiguration: Codable, Sendable {
     /// Schema version, so future imports can migrate older files.
     var version: Int
     var exportedAt: Date

@@ -54,6 +54,7 @@ enum Diagnostics {
                 "fsEventPaths": stats.fsEventPaths,
                 "sweeps": stats.sweeps,
                 "verifications": stats.verifications,
+                "iconComparisons": stats.iconComparisons,
                 "autoReapplies": stats.autoReapplies,
                 "manualReapplies": stats.manualReapplies,
                 "autoReapplyPerMinute": (stats.autoReapplyRate * 100).rounded() / 100,

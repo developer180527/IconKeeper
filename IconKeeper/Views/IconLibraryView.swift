@@ -82,7 +82,7 @@ struct IconLibraryView: View {
     }
 
     private func tile(for item: IconLibraryItem) -> some View {
-        let usageCount = store.appsUsing(iconID: item.id).count
+        let usageCount = store.summary.iconUsage[item.id, default: 0]
         return VStack(spacing: 8) {
             Group {
                 if let image = store.libraryIconImage(for: item) {

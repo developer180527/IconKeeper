@@ -9,8 +9,8 @@ import Foundation
 
 /// One recorded event — used for the "Activity" history view and to give
 /// users a paper trail of automatic reapplies after app updates.
-struct ActivityEntry: Identifiable, Codable, Hashable {
-    enum Kind: String, Codable {
+nonisolated struct ActivityEntry: Identifiable, Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Sendable {
         case added
         case applied
         case reapplied

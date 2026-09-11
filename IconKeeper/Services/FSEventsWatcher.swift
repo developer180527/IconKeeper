@@ -16,7 +16,7 @@
 import CoreServices
 import Foundation
 
-nonisolated final class FSEventsWatcher {
+nonisolated final class FSEventsWatcher: @unchecked Sendable {
     private let paths: [String]
     private let sinceWhen: FSEventStreamEventId
     /// `(changedPaths, needsFullScan)`.
@@ -25,6 +25,33 @@ nonisolated final class FSEventsWatcher {
 
     private let queue = DispatchQueue(label: "com.iconkeeper.fsevents", qos: .utility)
     private var stream: FSEventStreamRef?
+
+    /// Resolved paths of the items we protect. The stream watches their
+    /// *parent* directories recursively, so it also reports every file written
+    /// anywhere beneath them — for a protected folder inside an active project
+    /// that's a constant flood. Only the item itself and its `Icon\r` can
+    /// change its icon, so everything else is dropped here, on the FSEvents
+    /// queue, before it can reach the main thread.
+    private let lock = NSLock()
+    private var interestingPaths: Set<String> = []
+
+    func setInterestingPaths(_ paths: Set<String>) {
+        lock.lock(); interestingPaths = paths; lock.unlock()
+    }
+
+    private func relevant(_ paths: [String]) -> [String] {
+        lock.lock(); let interesting = interestingPaths; lock.unlock()
+        var matches: [String] = []
+        for path in paths {
+            if interesting.contains(path) {
+                matches.append(path)
+            } else if path.hasSuffix("/Icon\r") {
+                let item = String(path.dropLast(6))
+                if interesting.contains(item) { matches.append(item) }
+            }
+        }
+        return matches
+    }
 
     init(
         paths: [String],
@@ -88,7 +115,12 @@ nonisolated final class FSEventsWatcher {
     /// Invoked by the C callback (on `queue`) after each coalesced batch.
     fileprivate func handleBatch(latestEventId: FSEventStreamEventId, paths: [String], fullScan: Bool) {
         if latestEventId != 0 { persistEventId(latestEventId) }
-        onChange(paths, fullScan)
+        if fullScan {
+            onChange([], true)
+            return
+        }
+        let matches = relevant(paths)
+        if !matches.isEmpty { onChange(matches, false) }
     }
 }
 
@@ -113,7 +145,9 @@ private nonisolated func fsEventsCallback(
 
     var fullScan = false
     for i in 0..<numEvents {
-        if eventFlags[i] & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 {
+        let rescan = FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs)
+            | FSEventStreamEventFlags(kFSEventStreamEventFlagRootChanged)
+        if eventFlags[i] & rescan != 0 {
             fullScan = true
             break
         }

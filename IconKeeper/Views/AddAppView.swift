@@ -15,7 +15,7 @@ struct AddAppView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    private enum IconChoice {
+    private enum IconChoice: Equatable {
         case file(URL)
         case library(IconLibraryItem)
     }
@@ -26,6 +26,33 @@ struct AddAppView: View {
     @State private var iconChoice: IconChoice?
     @State private var errorMessage: String?
     @State private var batchTask: Task<Void, Never>?
+
+    /// Previews are loaded once per selection change, not in the body. The
+    /// body re-runs on every batch progress tick, and it used to decode the
+    /// icon file and read each item's Info.plist on every one of them.
+    private struct ItemPreview: Identifiable {
+        let id: URL
+        let icon: NSImage
+        let name: String
+    }
+    @State private var itemPreviews: [ItemPreview] = []
+    @State private var iconPreview: NSImage?
+
+    private func refreshItemPreviews() {
+        itemPreviews = itemURLs.prefix(4).map { url in
+            ItemPreview(id: url,
+                        icon: IconUtilities.currentIcon(forPath: url.path),
+                        name: IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app))
+        }
+    }
+
+    private func refreshIconPreview() {
+        switch iconChoice {
+        case .file(let url): iconPreview = NSImage(contentsOf: url)
+        case .library(let item): iconPreview = store.libraryIconImage(for: item)
+        case nil: iconPreview = nil
+        }
+    }
 
     private var isBatch: Bool { itemURLs.count > 1 }
 
@@ -53,6 +80,8 @@ struct AddAppView: View {
             }
         }
         .onAppear { if let initialAppURL { itemURLs = [initialAppURL] + additionalURLs } }
+        .onChange(of: itemURLs, initial: true) { refreshItemPreviews() }
+        .onChange(of: iconChoice, initial: true) { refreshIconPreview() }
         .alert(
             "Couldn't Apply Icon",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }),
@@ -106,15 +135,12 @@ struct AddAppView: View {
             cardChrome(targeted: targeted, filled: !itemURLs.isEmpty) {
                 if isBatch {
                     batchSummary
-                } else if let currentItemURL = itemURLs.first {
+                } else if let preview = itemPreviews.first {
                     VStack(spacing: 10) {
-                        Image(nsImage: IconUtilities.currentIcon(forPath: currentItemURL.path))
+                        Image(nsImage: preview.icon)
                             .resizable().interpolation(.high)
                             .frame(width: 84, height: 84)
-                        Text(IconManager.displayName(
-                            of: currentItemURL,
-                            kind: IconManager.classify(currentItemURL) ?? .app
-                        ))
+                        Text(preview.name)
                             .font(.headline)
                             .lineLimit(1)
                         Text("Current icon")
@@ -138,8 +164,8 @@ struct AddAppView: View {
     private var batchSummary: some View {
         VStack(spacing: 10) {
             HStack(spacing: -18) {
-                ForEach(itemURLs.prefix(4), id: \.self) { url in
-                    Image(nsImage: IconUtilities.currentIcon(forPath: url.path))
+                ForEach(itemPreviews) { preview in
+                    Image(nsImage: preview.icon)
                         .resizable().interpolation(.high)
                         .frame(width: 56, height: 56)
                         .shadow(radius: 1)
@@ -147,8 +173,8 @@ struct AddAppView: View {
             }
             Text("\(itemURLs.count) items")
                 .font(.headline)
-            Text(itemURLs.prefix(3)
-                .map { IconManager.displayName(of: $0, kind: IconManager.classify($0) ?? .app) }
+            Text(itemPreviews.prefix(3)
+                .map(\.name)
                 .joined(separator: ", ")
                 + (itemURLs.count > 3 ? "…" : ""))
                 .font(.caption)
@@ -173,7 +199,7 @@ struct AddAppView: View {
             if let url = urls.first { iconChoice = .file(url) }
         } content: { targeted in
             cardChrome(targeted: targeted, filled: iconChoice != nil) {
-                if let preview = newIconImage {
+                if let preview = iconPreview {
                     VStack(spacing: 10) {
                         Image(nsImage: preview)
                             .resizable().interpolation(.high)
@@ -251,14 +277,6 @@ struct AddAppView: View {
     }
 
     // MARK: - Derived
-
-    private var newIconImage: NSImage? {
-        switch iconChoice {
-        case .file(let url): NSImage(contentsOf: url)
-        case .library(let item): store.libraryIconImage(for: item)
-        case nil: nil
-        }
-    }
 
     private var newIconName: String {
         switch iconChoice {

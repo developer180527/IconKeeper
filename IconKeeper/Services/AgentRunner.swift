@@ -3,9 +3,13 @@
 //  IconKeeper
 //
 //  The headless code path. When the app binary is launched with `--agent`
-//  (by the launchd LaunchAgent on a /Applications change), it runs this
-//  instead of the GUI: read config, reapply any drifted icons, exit. No
-//  windows, no run loop.
+//  (by the launchd LaunchAgent), it runs this instead of the GUI: read
+//  config, reapply any genuinely drifted icons, exit. No windows, no run loop.
+//
+//  It uses the same `Verifier` as the GUI, so both judge drift identically —
+//  against the render reference captured at apply time. (It used to compare
+//  against the raw library asset, which scores every *folder* as drifted and
+//  so reapplied all of them on every agent run.)
 //
 
 import AppKit
@@ -13,8 +17,7 @@ import AppKit
 enum AgentRunner {
     /// Performs one verify-and-reapply pass, then terminates the process.
     static func runAndExit() -> Never {
-        // If the GUI app is already running, it owns protection (its FSEvents
-        // watcher handles the same change). Step aside to avoid double work.
+        // If the GUI app is already running, it owns protection. Step aside.
         let bundleID = Bundle.main.bundleIdentifier ?? "developer180527.IconKeeper"
         let others = NSRunningApplication
             .runningApplications(withBundleIdentifier: bundleID)
@@ -27,73 +30,55 @@ enum AgentRunner {
 
         for app in state.apps where app.isProtectionEnabled {
             guard let iconID = app.customIconID,
-                  let item = state.library.first(where: { $0.id == iconID }),
-                  let url = resolveBundleURL(for: app)
-            else { continue }
+                  let item = state.library.first(where: { $0.id == iconID }) else { continue }
 
-            // Skip apps we can't modify (system volume / no permission).
-            guard IconManager.writeCapability(for: url) == .writable else { continue }
+            let snapshot = ItemSnapshot(
+                id: app.id, kind: app.kind, path: app.bundlePath, bookmark: app.bookmark,
+                bundleIdentifier: app.bundleIdentifier, isProtectionEnabled: true, iconID: iconID,
+                referenceURL: app.appliedRenderFilename.map { persistence.renderFileURL(for: $0) },
+                backupURL: app.originalIconBackupFilename.map { persistence.backupFileURL(for: $0) },
+                libraryIconURL: persistence.libraryFileURL(for: item.filename),
+                reapplyCount: app.reapplyCount, autoReapplyEnabled: true,
+                lastFingerprint: nil, lastScore: nil
+            )
+            let evaluation = Verifier.evaluate(snapshot)
 
-            let iconURL = persistence.libraryFileURL(for: item.filename)
-            let expected = NSImage(contentsOf: iconURL)
+            // Trashed or missing items, or ones we can't modify: leave them.
+            guard evaluation.location != .trashed, evaluation.location != .missing,
+                  let url = evaluation.resolvedURL,
+                  IconManager.writeCapability(for: url) == .writable else { continue }
+            // Our icon is in place: nothing to do.
+            if evaluation.iconMatches { continue }
+            // A *different* custom icon was applied deliberately. The GUI asks
+            // the user about that; the agent must not silently overwrite it.
+            if evaluation.hasCustomIcon { continue }
 
-            // Act on real drift only: our specific icon isn't currently applied.
-            let hasCustomIcon = IconManager.isCustomIconApplied(at: url)
-            let applied = hasCustomIcon
-                && (expected.map { IconUtilities.iconsMatch(IconManager.captureCurrentIcon(of: url), $0) } ?? true)
-            guard !applied else { continue }
-
-            // Genuine icon showing (no custom present) → refresh the original
-            // backup to the app's current official icon before overriding it.
-            if !hasCustomIcon {
-                let backupURL = persistence.backupFileURL(for: "\(app.id.uuidString).png")
-                _ = try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: backupURL)
-            }
-
-            do {
-                try IconManager.applyIcon(at: iconURL, to: url)
-                // Re-stamp the recovery marker: an app update replaces the whole
-                // bundle, which takes the xattr with it. Without this, any drift
-                // the agent (rather than the GUI) fixes would leave the item
-                // permanently invisible to discovery.
-                if let iconID = app.customIconID {
-                    BundleMarker.write(
-                        ManagedMarker(appID: app.id, iconID: iconID, displayName: app.displayName, markedAt: Date()),
-                        to: url
-                    )
-                }
+            // Genuinely gone: refresh the original backup, then reapply.
+            Verifier.captureBackup(
+                of: url,
+                to: snapshot.backupURL ?? persistence.backupFileURL(for: "\(app.id.uuidString).png"))
+            let referenceURL = persistence.renderFileURL(for: app.appliedRenderFilename ?? "\(app.id.uuidString).png")
+            let outcome = Verifier.apply(
+                id: app.id,
+                iconURL: persistence.libraryFileURL(for: item.filename),
+                to: url,
+                referenceURL: referenceURL,
+                marker: ManagedMarker(appID: app.id, iconID: iconID, displayName: app.displayName, markedAt: Date())
+            )
+            if outcome.error == nil {
                 events.append(ActivityEntry(
                     kind: .reapplied,
                     appName: app.displayName,
                     message: "Reapplied “\(item.name)” in the background after a change."
                 ))
-            } catch {
-                // Persistent failures are surfaced by the GUI on next launch.
             }
         }
 
-        // Hand the record back to the GUI via an agent-only file it drains on
-        // launch — so we never write the shared config concurrently with it.
+        // Hand the record back to the GUI via an agent-only drop folder, so we
+        // never write the shared config concurrently with it.
         if !events.isEmpty {
             persistence.appendAgentEvents(events)
         }
-
         exit(0)
-    }
-
-    /// Resolves the bundle at its stored path, or via its bookmark if it moved.
-    /// (The GUI persists any relocation on its next launch.)
-    private static func resolveBundleURL(for app: ProtectedApp) -> URL? {
-        if FileManager.default.fileExists(atPath: app.bundlePath) {
-            return app.bundleURL
-        }
-        if let data = app.bookmark {
-            var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
-               FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
-        return nil
     }
 }

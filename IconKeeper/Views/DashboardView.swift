@@ -36,11 +36,11 @@ struct DashboardView: View {
             case .folders: "folder"
             }
         }
-        func matches(_ app: ProtectedApp) -> Bool {
+        func matches(_ kind: ItemKind) -> Bool {
             switch self {
             case .all: true
-            case .apps: app.kind == .app
-            case .folders: app.kind == .folder
+            case .apps: kind == .app
+            case .folders: kind == .folder
             }
         }
     }
@@ -143,61 +143,42 @@ struct DashboardView: View {
     @State private var attentionOnly = false
     @State private var searchText = ""
 
-    /// Items matching the kind filter — the population the state counts describe,
-    /// so the numbers on the chips always agree with what selecting one shows.
-    private var kindScoped: [ProtectedApp] {
-        store.apps.filter { kindFilter.matches($0) }
+    /// Everything the dashboard shows, derived in a single pass over the
+    /// published index. Previously each count and the visible list were
+    /// separate passes over the store — about thirteen per render — and some
+    /// of them computed icon health on the main thread.
+    private struct Derived {
+        var visible: [ItemIndexEntry] = []
+        var kindCounts: [KindFilter: Int] = [:]
+        var stateCounts: [StateFilter: Int] = [:]
+        var attention = 0
     }
 
-    private var visibleApps: [ProtectedApp] {
+    private func derive() -> Derived {
+        var d = Derived()
         let query = searchText.trimmingCharacters(in: .whitespaces)
-        return kindScoped.filter { app in
+        for entry in store.index {
+            for kind in KindFilter.allCases where kind.matches(entry.kind) { d.kindCounts[kind, default: 0] += 1 }
+            guard kindFilter.matches(entry.kind) else { continue }
+            // Counts describe the kind-scoped population, so selecting a
+            // count's option always shows exactly that many rows.
+            for state in StateFilter.allCases where state.matches(entry.status) { d.stateCounts[state, default: 0] += 1 }
+            if entry.needsAttention { d.attention += 1 }
+
             if attentionOnly {
-                guard needsAttention(app, computeHealth: true) else { return false }
+                guard entry.needsAttention else { continue }
             } else {
-                guard stateFilter.matches(store.status(for: app)) else { return false }
+                guard stateFilter.matches(entry.status) else { continue }
+                if healthFilter != .any {
+                    guard let level = entry.health, healthFilter.matches(level) else { continue }
+                }
             }
-            // Health is only evaluated when actually filtering on it — it reads
-            // the disk and compares rendered icons, so it stays off the path
-            // when the user hasn't asked for it.
-            if healthFilter != .any {
-                guard healthFilter.matches(store.health(for: app).overall) else { return false }
-            }
-            guard !query.isEmpty else { return true }
-            return app.displayName.localizedCaseInsensitiveContains(query)
-                || app.bundlePath.localizedCaseInsensitiveContains(query)
+            if !query.isEmpty,
+               !entry.name.localizedCaseInsensitiveContains(query),
+               !entry.path.localizedCaseInsensitiveContains(query) { continue }
+            d.visible.append(entry)
         }
-    }
-
-    /// True when *either* axis reports a problem: a bad protection state, or a
-    /// health check that isn't OK. Status is tested first because it's a
-    /// dictionary lookup, so most items never reach the costlier health call.
-    private func needsAttention(_ app: ProtectedApp, computeHealth: Bool) -> Bool {
-        switch store.status(for: app) {
-        case .drifted, .failed, .missing, .trashed, .externallyChanged: return true
-        case .paused: return false // deliberately switched off, not a problem
-        default: break
-        }
-        // Filtering is user-initiated, so it may compute. The badge count is
-        // drawn every layout pass, so it uses only what's already memoized and
-        // converges as the background sweep warms the cache.
-        guard let level = computeHealth
-            ? store.health(for: app).overall
-            : store.cachedHealthLevel(for: app.id)
-        else { return false }
-        return level == .problem || level == .warning
-    }
-
-    private var attentionCount: Int {
-        kindScoped.reduce(into: 0) { total, app in
-            if needsAttention(app, computeHealth: false) { total += 1 }
-        }
-    }
-
-    private func count(for filter: StateFilter) -> Int {
-        kindScoped.reduce(into: 0) { total, app in
-            if filter.matches(store.status(for: app)) { total += 1 }
-        }
+        return d
     }
 
     private var filtersActive: Bool {
@@ -213,16 +194,14 @@ struct DashboardView: View {
                     addSheet = AddSheet(appURL: urls.first, extraURLs: Array(urls.dropFirst()))
                 }
             } else {
-                filterBar
-                if visibleApps.isEmpty {
+                let d = derive()
+                filterBar(d)
+                if d.visible.isEmpty {
                     emptyResults
                 } else {
-                    List {
-                        // `id: \.id` keeps row identity stable so SwiftUI reuses
-                        // rows instead of rebuilding them as the filter changes.
-                        ForEach(visibleApps, id: \.id) { app in
-                            ProtectedAppRow(app: app) { detailAppID = app.id }
-                        }
+                    List(d.visible) { entry in
+                        ProtectedAppRow(entry: entry) { detailAppID = entry.id }
+                            .equatable() // unchanged rows skip their body entirely
                     }
                     .listStyle(.inset)
                 }
@@ -284,10 +263,30 @@ struct DashboardView: View {
     /// what it is, its protection state, and its health. They compose with AND,
     /// so "Protected + Has Issues" — an item that is guarded but still
     /// unhealthy — is expressible, which a single control could not do.
-    private var filterBar: some View {
+    private func filterBar(_ d: Derived) -> some View {
+        HStack(spacing: 10) {
+            // Scrolls rather than clips: the controls have a real intrinsic
+            // width, so a narrow window would otherwise cut them off.
+            ScrollView(.horizontal, showsIndicators: false) {
+                filterControls(d).padding(.trailing, 4)
+            }
+            Spacer(minLength: 4)
+            if store.isSweeping {
+                ProgressView().controlSize(.small)
+            }
+            Text("\(d.visible.count) of \(store.index.count)")
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .lineLimit(1).fixedSize()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(.bar)
+    }
+
+    private func filterControls(_ d: Derived) -> some View {
         HStack(spacing: 10) {
             Toggle(isOn: $attentionOnly) {
-                Label("Needs Attention (\(attentionCount))", systemImage: "exclamationmark.triangle.fill")
+                Label("Needs Attention (\(d.attention))", systemImage: "exclamationmark.triangle.fill")
             }
             .toggleStyle(.button)
             .tint(.orange)
@@ -298,7 +297,7 @@ struct DashboardView: View {
 
             Picker("Kind", selection: $kindFilter) {
                 ForEach(KindFilter.allCases) { filter in
-                    Label("\(filter.label) (\(kindCount(filter)))", systemImage: filter.symbol)
+                    Label("\(filter.label) (\(d.kindCounts[filter, default: 0]))", systemImage: filter.symbol)
                         .tag(filter)
                 }
             }
@@ -306,7 +305,7 @@ struct DashboardView: View {
 
             Picker("State", selection: $stateFilter) {
                 ForEach(StateFilter.allCases) { filter in
-                    Label("\(filter.label) (\(count(for: filter)))", systemImage: filter.symbol)
+                    Label("\(filter.label) (\(d.stateCounts[filter, default: 0]))", systemImage: filter.symbol)
                         .tag(filter)
                 }
             }
@@ -334,23 +333,7 @@ struct DashboardView: View {
                 .buttonStyle(.link).font(.caption)
             }
 
-            Spacer(minLength: 8)
-
-            if store.isSweeping {
-                ProgressView().controlSize(.small)
-                Text("Checking…").font(.caption).foregroundStyle(.secondary)
-            }
-
-            Text("\(visibleApps.count) of \(store.apps.count)")
-                .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(.bar)
-    }
-
-    private func kindCount(_ filter: KindFilter) -> Int {
-        store.apps.reduce(into: 0) { total, app in if filter.matches(app) { total += 1 } }
     }
 
     /// Distinguishes "your search found nothing" from "this filter is empty".

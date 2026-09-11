@@ -11,3 +11,5 @@ If IconKeeper becomes a commercial-quality macOS utility, these would be compell
 
 *Drop an app in IconKeeper to start editing / customizing the icon, the editor will pop up or a separate editor panel to edit icons. 
 * Need to add reassuring animations when clicking actionable button to assure that said action has been done/executed. 
+* Add a "Quick Actions" button for right clicked apps or folders in Finder with name "Customize Icon" which opens the IconKeeper app with the selected item as entry. 
+* Optimize I/O on bulk apply icons and increase performance on it. 

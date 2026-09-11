@@ -61,9 +61,14 @@ final class AppMonitor {
     func syncWatchers(for apps: [ProtectedApp]) {
         let active = apps.filter { $0.isProtectionEnabled && $0.bundleExists }
         let dirs = Set(active.map { $0.bundleURL.deletingLastPathComponent().path }).sorted()
+        // FSEvents reports canonical paths, so match against resolved ones.
+        let interesting = Set(active.map { $0.bundleURL.resolvingSymlinksInPath().path })
 
-        // Nothing changed in the set of watched directories — keep the stream.
-        guard dirs != watchedPaths else { return }
+        // Same directories: keep the stream, just update what it forwards.
+        guard dirs != watchedPaths else {
+            watcher?.setInterestingPaths(interesting)
+            return
+        }
 
         watcher?.stop()
         watchedPaths = dirs
@@ -85,6 +90,7 @@ final class AppMonitor {
                 UserDefaults.standard.set(NSNumber(value: id), forKey: fsEventsLastEventIdKey)
             }
         )
+        newWatcher.setInterestingPaths(interesting)
         watcher = newWatcher
         newWatcher.start()
     }

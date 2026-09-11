@@ -4,17 +4,22 @@
 //
 //  A single row in the dashboard: icon, name, status, and quick actions.
 //
+//  Driven entirely by a precomputed `ItemIndexEntry`. The body does no disk
+//  I/O and no engine calls, and `Equatable` lets SwiftUI skip re-rendering a
+//  row whose entry didn't change when the list around it does.
+//
 
 import SwiftUI
 
-struct ProtectedAppRow: View {
-    let app: ProtectedApp
+struct ProtectedAppRow: View, Equatable {
+    let entry: ItemIndexEntry
     var onSelect: () -> Void
 
     @Environment(AppStore.self) private var store
 
-    private var status: AppStatus { store.status(for: app) }
-    private var health: IconHealth { store.health(for: app) }
+    static func == (lhs: ProtectedAppRow, rhs: ProtectedAppRow) -> Bool {
+        lhs.entry == rhs.entry // the closure is intentionally not compared
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -22,9 +27,9 @@ struct ProtectedAppRow: View {
                 .frame(width: 44, height: 44)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(app.displayName)
+                Text(entry.name)
                     .font(.body.weight(.semibold))
-                Text(app.bundlePath)
+                Text(entry.path)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -33,31 +38,29 @@ struct ProtectedAppRow: View {
 
             Spacer()
 
-            // A deliberate external change needs an answer, so offer it inline
-            // rather than burying the choice in the detail sheet.
-            if status == .externallyChanged {
-                Button("Keep Mine") { store.keepMyIcon(app.id) }
+            // A deliberate external change needs an answer, so offer it inline.
+            if entry.status == .externallyChanged {
+                Button("Keep Mine") { store.keepMyIcon(entry.id) }
                     .controlSize(.small)
-                Button("Adopt") { store.adoptCurrentIcon(app.id) }
+                Button("Adopt") { store.adoptCurrentIcon(entry.id) }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
-            } else if status == .trashed {
-                Button("Remove") { store.removeApp(app.id) }
+            } else if entry.status == .trashed {
+                Button("Remove") { store.removeApp(entry.id) }
                     .controlSize(.small)
                     .help("Stop tracking this item — it's in the Trash")
-            } else if health.overall != .unknown {
-                // Hidden when paused — the status badge already reads "Paused".
-                HealthPill(level: health.overall)
+            } else if let health = entry.health, health != .unknown {
+                HealthPill(level: health)
             }
-            StatusBadge(status: status)
+            StatusBadge(status: entry.status)
 
             Toggle("Protect", isOn: Binding(
-                get: { app.isProtectionEnabled },
-                set: { store.setProtection(app.id, enabled: $0) }
+                get: { entry.isProtectionEnabled },
+                set: { store.setProtection(entry.id, enabled: $0) }
             ))
             .toggleStyle(.switch)
             .labelsHidden()
-            .help(app.isProtectionEnabled ? "Protection on" : "Protection off")
+            .help(entry.isProtectionEnabled ? "Protection on" : "Protection off")
 
             actionMenu
         }
@@ -69,7 +72,7 @@ struct ProtectedAppRow: View {
 
     @ViewBuilder
     private var iconView: some View {
-        if let image = store.libraryIconImage(app.customIconID) {
+        if let image = store.libraryIconImage(entry.iconID) {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
@@ -77,7 +80,7 @@ struct ProtectedAppRow: View {
         } else {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.quaternary)
-                .overlay(Image(systemName: "app.dashed").foregroundStyle(.secondary))
+                .overlay(Image(systemName: entry.kind.symbolName).foregroundStyle(.secondary))
         }
     }
 
@@ -96,18 +99,18 @@ struct ProtectedAppRow: View {
     private var menuContents: some View {
         Button("Show Details", systemImage: "info.circle", action: onSelect)
         Button("Reapply Icon", systemImage: "arrow.triangle.2.circlepath") {
-            store.reapply(app.id)
+            store.reapply(entry.id)
         }
         Button("Restore Original", systemImage: "arrow.uturn.backward") {
-            store.restoreOriginal(app.id)
+            store.restoreOriginal(entry.id)
         }
         Divider()
         Button("Reveal in Finder", systemImage: "folder") {
-            NSWorkspace.shared.activateFileViewerSelecting([app.bundleURL])
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)])
         }
         Divider()
         Button("Remove from IconKeeper", systemImage: "trash", role: .destructive) {
-            store.removeApp(app.id)
+            store.removeApp(entry.id)
         }
     }
 }

@@ -14,7 +14,7 @@ import Foundation
 /// file inside the directory — so the whole engine treats them alike. They
 /// differ only in metadata (folders have no bundle identifier) and in how
 /// often they drift (apps get replaced by updates; folders rarely change).
-nonisolated enum ItemKind: String, Codable, Hashable {
+nonisolated enum ItemKind: String, Codable, Hashable, Sendable {
     case app
     case folder
 
@@ -38,7 +38,7 @@ nonisolated enum ItemKind: String, Codable, Hashable {
 /// Only persistable data lives here. Transient, runtime state (current
 /// drift status, last error, in-flight work) is tracked separately by
 /// `AppStore` keyed on `id`, so this type stays a clean `Codable` value.
-nonisolated struct ProtectedApp: Identifiable, Codable, Hashable {
+nonisolated struct ProtectedApp: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
 
     /// Absolute path to the `.app` bundle or folder, e.g. `/Applications/Foo.app`.
@@ -137,7 +137,7 @@ nonisolated struct ProtectedApp: Identifiable, Codable, Hashable {
 }
 
 /// Live status for a protected app, recomputed by monitoring. Not persisted.
-enum AppStatus: Equatable {
+nonisolated enum AppStatus: Equatable, Sendable {
     /// Custom icon present and matching — all good.
     case protected
     /// IconKeeper is currently (re)applying the icon.

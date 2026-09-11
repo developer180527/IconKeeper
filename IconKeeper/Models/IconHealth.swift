@@ -10,15 +10,13 @@
 import Foundation
 
 /// Severity of a single health check (and of the overall rollup).
-enum HealthLevel: Equatable {
+nonisolated enum HealthLevel: Equatable, Comparable, Sendable {
     case ok
     case warning
     case problem
     /// Not applicable right now (e.g. protection paused).
     case unknown
-}
 
-extension HealthLevel: Comparable {
     /// Higher = more severe. `unknown` is excluded from "worst-of" math.
     private var severity: Int {
         switch self {
@@ -35,7 +33,7 @@ extension HealthLevel: Comparable {
 }
 
 /// One transparent diagnostic: what it measures, the verdict, and the rule.
-struct HealthCheck: Identifiable {
+nonisolated struct HealthCheck: Identifiable, Equatable, Sendable {
     /// Stable key (also used as the SwiftUI identity).
     let id: String
     let title: String
@@ -47,7 +45,7 @@ struct HealthCheck: Identifiable {
 }
 
 /// The full health picture for one protected app.
-struct IconHealth {
+nonisolated struct IconHealth: Equatable, Sendable {
     let overall: HealthLevel
     let checks: [HealthCheck]
 }

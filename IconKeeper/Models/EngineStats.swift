@@ -14,8 +14,11 @@ struct EngineStats {
     var fsEventBatches = 0
     /// Individual changed paths delivered across those callbacks.
     var fsEventPaths = 0
-    /// Times an item's icon was checked against its reference.
+    /// Times an item was evaluated.
     var verifications = 0
+    /// Evaluations that actually rendered and pixel-compared the icon. The rest
+    /// were answered by an unchanged disk fingerprint — the gap is the saving.
+    var iconComparisons = 0
     /// Reapplies triggered by drift detection (the loop-prone path).
     var autoReapplies = 0
     /// Reapplies the user asked for explicitly.

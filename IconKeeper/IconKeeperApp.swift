@@ -48,9 +48,18 @@ struct IconKeeperApp: App {
             MenuBarView()
                 .environment(store)
         } label: {
-            Image(systemName: store.driftedCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield")
+            // A view, not an expression in the App body: reading the store here
+            // would re-evaluate every scene whenever any count changed.
+            MenuBarLabel().environment(store)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+private struct MenuBarLabel: View {
+    @Environment(AppStore.self) private var store
+    var body: some View {
+        Image(systemName: store.summary.needsAttention > 0 ? "exclamationmark.shield.fill" : "checkmark.shield")
     }
 }
 

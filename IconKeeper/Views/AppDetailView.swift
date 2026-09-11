@@ -36,7 +36,7 @@ struct AppDetailView: View {
                         .textSelection(.enabled)
                 }
                 Spacer()
-                StatusBadge(status: store.status(for: app))
+                StatusBadge(status: store.entry(for: app.id)?.status ?? store.status(for: app))
             }
             .padding(20)
 
@@ -56,6 +56,7 @@ struct AppDetailView: View {
             footer(for: app)
         }
         .frame(width: 560, height: 600)
+        .task { store.verifyAndReapplyIfNeeded(appID: app.id) } // fresh health, off-main
     }
 
     // MARK: - Icons

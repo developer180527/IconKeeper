@@ -65,7 +65,7 @@ struct ContentView: View {
             case .developer: DeveloperView()
             }
         }
-        .frame(minWidth: 880, minHeight: 600)
+        .frame(minWidth: 1000, minHeight: 600)
         .alert(
             "Something went wrong",
             isPresented: Binding(

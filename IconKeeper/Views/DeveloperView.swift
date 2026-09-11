@@ -42,10 +42,13 @@ struct DeveloperView: View {
 
             Section("Engine activity") {
                 metric("Uptime", Self.duration(since: stats.startedAt))
-                metric("FSEvents batches", "\(stats.fsEventBatches)")
-                metric("Changed paths seen", "\(stats.fsEventPaths)")
+                // The watcher discards churn beneath protected items, so these
+                // count only events that could actually change an icon.
+                metric("Relevant FSEvents batches", "\(stats.fsEventBatches)")
+                metric("Relevant changed paths", "\(stats.fsEventPaths)")
                 metric("Sweeps run", "\(stats.sweeps)")
                 metric("Verifications", "\(stats.verifications)")
+                metric("Icon comparisons", "\(stats.iconComparisons)")
             }
 
             Section("Reapply behaviour") {
@@ -101,9 +104,9 @@ struct DeveloperView: View {
             }
 
             Section("Library") {
-                metric("Protected items", "\(store.apps.count)")
-                metric("Apps", "\(store.apps.filter { $0.kind == .app }.count)")
-                metric("Folders", "\(store.apps.filter { $0.kind == .folder }.count)")
+                metric("Protected items", "\(store.summary.total)")
+                metric("Apps", "\(store.summary.apps)")
+                metric("Folders", "\(store.summary.folders)")
                 metric("Icons in library", "\(store.library.count)")
                 metric("Activity entries", "\(store.activity.count)")
             }
