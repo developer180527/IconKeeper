@@ -11,7 +11,8 @@ extension AppStatus {
     var color: Color {
         switch self {
         case .protected: .green
-        case .applying, .drifted: .orange
+        case .checking: .secondary
+        case .applying, .restoring, .drifted: .orange
         case .paused: .gray
         case .missing: .gray
         case .trashed: .gray

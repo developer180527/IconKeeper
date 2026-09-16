@@ -2,7 +2,7 @@
 //  AppDetailView.swift
 //  IconKeeper
 //
-//  Per-app detail: before/after icons, stats, actions, and recent history.
+//  Per-item detail: before/after icons, health, stats, actions, and history.
 //
 
 import SwiftUI
@@ -13,21 +13,29 @@ struct AppDetailView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    private var app: ProtectedApp? { store.apps.first { $0.id == appID } }
+    /// Read off the main thread, and refreshed when something about the item changes.
+    @State private var iconOnDisk: NSImage?
+    @State private var iconOnDiskLoaded = false
+
+    private var app: ProtectedApp? { store.item(appID) }
 
     var body: some View {
-        if let app {
-            content(for: app)
-        } else {
-            // App was removed while the sheet was open.
-            VStack { Text("This app is no longer protected.") }
-                .padding(40)
-                .onAppear { dismiss() }
+        Group {
+            if let app {
+                content(for: app)
+            } else {
+                // Removed while the sheet was open.
+                VStack { Text("This item is no longer protected.") }
+                    .padding(40)
+                    .onAppear { dismiss() }
+            }
         }
+        .sheetErrorAlert(itemID: appID)
     }
 
     private func content(for app: ProtectedApp) -> some View {
-        VStack(spacing: 0) {
+        let status = store.entry(for: app.id)?.status ?? store.status(for: app)
+        return VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.displayName).font(.title2.weight(.bold))
@@ -36,16 +44,26 @@ struct AppDetailView: View {
                         .textSelection(.enabled)
                 }
                 Spacer()
-                StatusBadge(status: store.entry(for: app.id)?.status ?? store.status(for: app))
+                StatusBadge(status: status)
             }
             .padding(20)
+
+            if case .failed(let message) = status {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
 
             Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     iconComparison(for: app)
-                    HealthSection(health: store.health(for: app))
+                    // `healthByID` is observed, so this follows every check change.
+                    HealthSection(health: store.health(for: app.id))
                     statsGrid(for: app)
                     activitySection(for: app)
                 }
@@ -56,7 +74,17 @@ struct AppDetailView: View {
             footer(for: app)
         }
         .frame(width: 560, height: 600)
-        .task { store.verifyAndReapplyIfNeeded(appID: app.id) } // fresh health, off-main
+        .task { store.scheduleVerify([app.id]) } // fresh health, off-main
+        .task(id: IconRefreshKey(status: status, lastApplied: app.lastAppliedDate, path: app.bundlePath)) {
+            iconOnDisk = await store.currentIcon(of: app)
+            iconOnDiskLoaded = true
+        }
+    }
+
+    private struct IconRefreshKey: Equatable {
+        let status: AppStatus
+        let lastApplied: Date?
+        let path: String
     }
 
     // MARK: - Icons
@@ -67,7 +95,7 @@ struct AppDetailView: View {
             Image(systemName: "arrow.right").foregroundStyle(.secondary)
             iconTile("Custom", image: store.libraryIconImage(app.customIconID), fallback: "photo")
             Image(systemName: "equal").foregroundStyle(.secondary)
-            iconTile("On Disk Now", image: store.currentBundleIcon(app), fallback: "app.dashed")
+            iconTile("On Disk Now", image: iconOnDisk, fallback: iconOnDiskLoaded ? "app.dashed" : "ellipsis")
         }
         .frame(maxWidth: .infinity)
     }
@@ -116,7 +144,9 @@ struct AppDetailView: View {
     // MARK: - Activity
 
     private func activitySection(for app: ProtectedApp) -> some View {
-        let entries = store.activity.filter { $0.appName == app.displayName }.prefix(8)
+        // By item id: two items can share a name (an app and a folder both
+        // called "Notepad"), and each must only show its own history.
+        let entries = ActivityFilter.entries(for: app, in: store.activity, allItems: store.apps).prefix(8)
         return VStack(alignment: .leading, spacing: 8) {
             Text("Recent Activity").font(.headline)
             if entries.isEmpty {
@@ -159,15 +189,15 @@ struct AppDetailView: View {
     private func changeIconMenu(for app: ProtectedApp) -> some View {
         Menu {
             Button("From File…", systemImage: "folder") {
-                if let url = Panels.chooseIcons().first {
-                    try? store.assignIcon(.file(url), to: app.id)
+                if let url = Panels.chooseIcons(allowsMultiple: false).first {
+                    store.assignIcon(.file(url), to: app.id)
                 }
             }
             if !store.library.isEmpty {
                 Divider()
                 Section("From Library") {
                     ForEach(store.library) { item in
-                        Button(item.name) { try? store.assignIcon(.library(item.id), to: app.id) }
+                        Button(item.name) { store.assignIcon(.library(item.id), to: app.id) }
                     }
                 }
             }

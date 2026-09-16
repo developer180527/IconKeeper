@@ -7,7 +7,7 @@
 
 import Foundation
 
-/// An icon the user has imported for reuse across one or more apps.
+/// An icon the user has imported for reuse across one or more items.
 ///
 /// The actual icon bytes live as a file (named `filename`) inside the
 /// library directory managed by `PersistenceController`; the model only
@@ -23,10 +23,16 @@ nonisolated struct IconLibraryItem: Identifiable, Codable, Hashable, Sendable {
 
     var dateAdded: Date
 
-    init(id: UUID = UUID(), name: String, filename: String, dateAdded: Date = Date()) {
+    /// SHA-256 of the stored file. Importing the same bytes twice reuses the
+    /// existing entry instead of storing another copy. `nil` for entries
+    /// written before hashing; filled in at launch.
+    var contentHash: String?
+
+    init(id: UUID = UUID(), name: String, filename: String, dateAdded: Date = Date(), contentHash: String? = nil) {
         self.id = id
         self.name = name
         self.filename = filename
         self.dateAdded = dateAdded
+        self.contentHash = contentHash
     }
 }

@@ -66,15 +66,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 1000, minHeight: 600)
-        .alert(
-            "Something went wrong",
-            isPresented: Binding(
-                get: { store.lastErrorMessage != nil },
-                set: { if !$0 { store.lastErrorMessage = nil } }
-            ),
-            actions: { Button("OK", role: .cancel) {} },
-            message: { Text(store.lastErrorMessage ?? "") }
-        )
+        .windowErrorAlert()
     }
 }
 
@@ -84,13 +76,13 @@ private struct SidebarSummary: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: store.driftedCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill")
-                .foregroundStyle(store.driftedCount > 0 ? .orange : .green)
+            Image(systemName: store.summary.needsAttention > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill")
+                .foregroundStyle(store.summary.needsAttention > 0 ? .orange : .green)
             VStack(alignment: .leading, spacing: 1) {
-                Text("\(store.protectedCount) protected")
+                Text("\(store.summary.protectionEnabled) protected")
                     .font(.caption.weight(.semibold))
-                if store.driftedCount > 0 {
-                    Text("\(store.driftedCount) need attention")
+                if store.summary.needsAttention > 0 {
+                    Text("\(store.summary.needsAttention) need attention")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {

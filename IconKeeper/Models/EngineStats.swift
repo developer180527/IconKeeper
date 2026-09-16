@@ -23,6 +23,8 @@ struct EngineStats {
     var autoReapplies = 0
     /// Reapplies the user asked for explicitly.
     var manualReapplies = 0
+    /// Duplicate reapply requests absorbed because one was already queued.
+    var coalescedReapplies = 0
     /// Full sweeps started.
     var sweeps = 0
     /// Times the loop guard had to stop a runaway item.
@@ -30,10 +32,32 @@ struct EngineStats {
 
     var startedAt = Date()
 
-    /// Auto-reapplies per minute since launch — the number that screams when a
-    /// feedback loop is running. Healthy idle usage sits near zero.
-    var autoReapplyRate: Double {
-        let minutes = max(Date().timeIntervalSince(startedAt) / 60, 0.01)
-        return Double(autoReapplies) / minutes
+    /// Recent automatic reapplies, trimmed to `rateWindow`.
+    private(set) var recentAutoReapplyTimes: [Date] = []
+
+    static let rateWindow: TimeInterval = 5 * 60
+
+    mutating func recordAutoReapply(at date: Date = Date()) {
+        autoReapplies += 1
+        recentAutoReapplyTimes.append(date)
+        trim(now: date)
+    }
+
+    private mutating func trim(now: Date) {
+        if let firstFresh = recentAutoReapplyTimes.firstIndex(where: { now.timeIntervalSince($0) < Self.rateWindow }) {
+            recentAutoReapplyTimes.removeFirst(firstFresh)
+        } else {
+            recentAutoReapplyTimes.removeAll()
+        }
+    }
+
+    /// Automatic reapplies per minute over the last five minutes — the number
+    /// that screams when a feedback loop is running. It's windowed rather than
+    /// averaged over uptime, so a loop that starts after hours of calm still
+    /// shows up immediately. Healthy idle usage sits near zero.
+    func autoReapplyRate(now: Date = Date()) -> Double {
+        let recent = recentAutoReapplyTimes.filter { now.timeIntervalSince($0) < Self.rateWindow }.count
+        let minutes = max(min(now.timeIntervalSince(startedAt), Self.rateWindow) / 60, 0.5)
+        return Double(recent) / minutes
     }
 }

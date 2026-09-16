@@ -16,7 +16,7 @@ struct DiscoverySheet: View {
         VStack(spacing: 0) {
             VStack(spacing: 4) {
                 Text("Recover Customized Apps").font(.title3.weight(.bold))
-                Text("These apps carry an icon IconKeeper applied, but aren't currently managed. Re-adopt to resume protection, or restore the original icon.")
+                Text("These apps in your Applications folders carry an icon IconKeeper applied, but aren't currently managed. Re-adopt to resume protection, or restore the original icon.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -33,7 +33,7 @@ struct DiscoverySheet: View {
             } else {
                 List(store.discoveredOrphans) { item in
                     HStack(spacing: 10) {
-                        Image(nsImage: IconUtilities.currentIcon(forPath: item.bundlePath))
+                        Image(nsImage: IconManager.captureCurrentIcon(of: URL(fileURLWithPath: item.bundlePath)))
                             .resizable()
                             .frame(width: 32, height: 32)
                         VStack(alignment: .leading, spacing: 1) {
@@ -62,6 +62,7 @@ struct DiscoverySheet: View {
             .padding(16)
         }
         .frame(width: 480)
+        .sheetErrorAlert()
         .onChange(of: store.discoveredOrphans.isEmpty) { _, isEmpty in
             if isEmpty { dismiss() }
         }

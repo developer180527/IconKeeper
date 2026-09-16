@@ -17,7 +17,7 @@ struct ActivityView: View {
                 ContentUnavailableView(
                     "No Activity Yet",
                     systemImage: "clock.arrow.circlepath",
-                    description: Text("Actions like applying, restoring, and automatic reapplies will appear here.")
+                    description: Text("Applying, restoring, and automatic reapplies for your apps and folders will appear here.")
                 )
             } else {
                 List(store.activity) { entry in

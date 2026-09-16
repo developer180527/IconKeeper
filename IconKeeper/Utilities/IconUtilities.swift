@@ -18,16 +18,6 @@ nonisolated enum IconUtilities {
 
     static let acceptedIconExtensions: Set<String> = ["icns", "png", "tiff", "tif", "jpg", "jpeg", "heic"]
 
-    /// Loads an image from disk, returning `nil` if it can't be decoded.
-    static func image(at url: URL) -> NSImage? {
-        NSImage(contentsOf: url)
-    }
-
-    /// The icon Finder currently shows for a file/bundle.
-    static func currentIcon(forPath path: String) -> NSImage {
-        NSWorkspace.shared.icon(forFile: path)
-    }
-
     /// Renders `image` to PNG data at a fixed pixel size. Used both for saving
     /// backups and for producing a normalized representation for comparison.
     static func pngData(from image: NSImage, pixelSize: Int = 512) -> Data? {
@@ -58,23 +48,6 @@ nonisolated enum IconUtilities {
         NSGraphicsContext.restoreGraphicsState()
 
         return rep.representation(using: .png, properties: [:])
-    }
-
-    /// Saves an image as a PNG file (used for original-icon backups).
-    @discardableResult
-    static func savePNG(_ image: NSImage, to url: URL, pixelSize: Int = 1024) throws -> URL {
-        guard let data = pngData(from: image, pixelSize: pixelSize) else {
-            throw IconError.encodingFailed
-        }
-        try data.write(to: url, options: .atomic)
-        return url
-    }
-
-    /// A stable fingerprint of an icon's appearance, robust to NSImage
-    /// re-rendering. Two icons that look the same produce the same hash.
-    static func fingerprint(of image: NSImage, pixelSize: Int = 64) -> Int? {
-        guard let data = pngData(from: image, pixelSize: pixelSize) else { return nil }
-        return data.hashValue
     }
 
     /// Renders an image to raw RGBA pixels at a fixed size for comparison.
@@ -112,23 +85,6 @@ nonisolated enum IconUtilities {
         for i in 0..<pa.count { sum += abs(Int(pa[i]) - Int(pb[i])) }
         return Double(sum) / Double(pa.count)
     }
-
-    /// Whether two icons look like the same asset. Threshold absorbs resampling
-    /// noise while still catching a genuinely different icon (which scores high).
-    static func iconsMatch(_ a: NSImage, _ b: NSImage, tolerance: Double = 20) -> Bool {
-        meanAbsoluteDifference(a, b) <= tolerance
-    }
-
-    /// The largest pixel dimension available across an image's representations.
-    /// Used to judge icon resolution quality (vector/device-matched reps report
-    /// 0 pixels, so we fall back to the logical size).
-    static func maxPixelSize(of image: NSImage) -> Int {
-        let largestRep = image.representations
-            .map { max($0.pixelsWide, $0.pixelsHigh) }
-            .max() ?? 0
-        if largestRep > 0 { return largestRep }
-        return Int(max(image.size.width, image.size.height))
-    }
 }
 
 /// Errors surfaced by icon operations.
@@ -145,11 +101,11 @@ nonisolated enum IconError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidIcon: "The selected file is not a valid image."
-        case .applyFailed: "macOS refused to set the icon. Check that you have permission to modify this app."
-        case .removeFailed: "Couldn't remove the custom icon from this app."
-        case .bundleMissing: "The application bundle could not be found."
+        case .applyFailed: "macOS refused to set the icon. Check that you have permission to modify this item."
+        case .removeFailed: "Couldn't remove the custom icon from this item."
+        case .bundleMissing: "The item could not be found."
         case .unsupportedItem: "IconKeeper can protect apps and folders. Individual files aren't supported, because macOS discards their custom icon whenever the file is saved."
-        case .notWritable: "IconKeeper doesn't have permission to modify this app. Try moving it to /Applications or check its permissions."
+        case .notWritable: "IconKeeper doesn't have permission to modify this item. Check its permissions, or for an app, try moving it to /Applications."
         case .systemProtected: "This is a built-in macOS app on the read-only system volume and can't be modified."
         case .encodingFailed: "Couldn't process the icon image."
         }

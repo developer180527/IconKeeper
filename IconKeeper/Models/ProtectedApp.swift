@@ -53,10 +53,11 @@ nonisolated struct ProtectedApp: Identifiable, Codable, Hashable, Sendable {
     /// User-facing name, defaults to the bundle's display name.
     var displayName: String
 
-    /// The library icon currently assigned to this app, if any.
+    /// The library icon currently assigned to this item, if any.
     var customIconID: UUID?
 
     /// Filename (inside the Backups directory) of the captured original icon.
+    /// Backups are content-addressed, so items with the same original share one file.
     var originalIconBackupFilename: String?
 
     /// Filename (inside the Renders directory) holding how macOS rendered our
@@ -69,7 +70,7 @@ nonisolated struct ProtectedApp: Identifiable, Codable, Hashable, Sendable {
     /// directory migration doesn't permanently orphan it.
     var bookmark: Data?
 
-    /// When `false`, IconKeeper leaves the app alone (no monitoring / reapply).
+    /// When `false`, IconKeeper leaves the item alone (no monitoring / reapply).
     var isProtectionEnabled: Bool
 
     var dateAdded: Date
@@ -130,55 +131,9 @@ nonisolated struct ProtectedApp: Identifiable, Codable, Hashable, Sendable {
 
     var bundleURL: URL { URL(fileURLWithPath: bundlePath) }
 
-    /// `true` when the item still exists on disk.
+    /// `true` when the item still exists on disk. Disk I/O — keep it off the
+    /// main thread for anything that runs per item.
     var bundleExists: Bool {
         FileManager.default.fileExists(atPath: bundlePath)
-    }
-}
-
-/// Live status for a protected app, recomputed by monitoring. Not persisted.
-nonisolated enum AppStatus: Equatable, Sendable {
-    /// Custom icon present and matching — all good.
-    case protected
-    /// IconKeeper is currently (re)applying the icon.
-    case applying
-    /// Custom icon is missing (e.g. an update wiped it); a reapply is queued.
-    case drifted
-    /// Protection is turned off for this app.
-    case paused
-    /// The bundle could not be found on disk.
-    case missing
-    /// The item is sitting in the Trash — protection is paused rather than
-    /// following it there and writing icons into the Trash.
-    case trashed
-    /// A *different* custom icon is in place: someone deliberately changed it.
-    /// We don't overwrite that without asking.
-    case externallyChanged
-    /// The last operation failed; carries a human-readable reason.
-    case failed(String)
-
-    var label: String {
-        switch self {
-        case .protected: "Protected"
-        case .applying: "Applying…"
-        case .drifted: "Restoring…"
-        case .paused: "Paused"
-        case .missing: "Missing"
-        case .trashed: "In Trash"
-        case .externallyChanged: "Icon changed"
-        case .failed: "Error"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .protected: "checkmark.shield.fill"
-        case .applying, .drifted: "arrow.triangle.2.circlepath"
-        case .paused: "pause.circle.fill"
-        case .missing: "questionmark.circle.fill"
-        case .trashed: "trash.fill"
-        case .externallyChanged: "person.crop.circle.badge.questionmark"
-        case .failed: "exclamationmark.triangle.fill"
-        }
     }
 }

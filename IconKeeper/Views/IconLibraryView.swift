@@ -2,7 +2,7 @@
 //  IconLibraryView.swift
 //  IconKeeper
 //
-//  The personal icon library: import, organize, and reuse icons across apps.
+//  The personal icon library: import, organize, and reuse icons across items.
 //
 
 import SwiftUI
@@ -66,7 +66,7 @@ struct IconLibraryView: View {
                 .foregroundStyle(.secondary)
             Text("Your icon library is empty")
                 .font(.title3.weight(.semibold))
-            Text("Import .icns or image files to reuse them across apps.\nDrag icons here, or use the + button.")
+            Text("Import .icns or image files to reuse them across apps and folders.\nDrag icons here, or use the + button.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -160,8 +160,8 @@ private struct BatchApplySheet: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 4) {
-                Text("Apply Icon to Apps").font(.title3.weight(.bold))
-                Text("Select the protected apps that should use this icon.")
+                Text("Apply Icon to Items").font(.title3.weight(.bold))
+                Text("Select the protected items that should use this icon.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(.vertical, 18)
@@ -169,7 +169,7 @@ private struct BatchApplySheet: View {
             Divider()
 
             if store.apps.isEmpty {
-                Text("No protected apps yet.")
+                Text("No protected items yet.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -179,6 +179,9 @@ private struct BatchApplySheet: View {
                             Image(nsImage: image).resizable().frame(width: 24, height: 24)
                         }
                         Text(app.displayName)
+                        Spacer()
+                        // Names repeat (an app and a folder both called "Notepad").
+                        Text(app.kind.label).font(.caption).foregroundStyle(.secondary)
                     }
                     .tag(app.id)
                 }
@@ -203,5 +206,6 @@ private struct BatchApplySheet: View {
             .padding(16)
         }
         .frame(width: 420)
+        .sheetErrorAlert()
     }
 }

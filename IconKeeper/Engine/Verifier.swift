@@ -23,7 +23,7 @@ import ImageIO
 /// removed, the Finder "has custom icon" flag, or the item itself being swapped
 /// out (a new inode) — so an unchanged fingerprint means the previous verdict
 /// still holds and the expensive comparison can be skipped.
-nonisolated struct DiskFingerprint: Equatable, Sendable {
+nonisolated struct DiskFingerprint: Codable, Equatable, Sendable {
     var itemInode: UInt64
     var iconInode: UInt64 // 0 when there is no Icon\r
     var iconChanged: Int64
@@ -80,6 +80,8 @@ nonisolated struct ItemSnapshot: Sendable {
     /// From the previous evaluation — lets an unchanged item skip the compare.
     let lastFingerprint: DiskFingerprint?
     let lastScore: Double?
+    /// The item's disk epoch when the snapshot was taken (see `ItemRuntime`).
+    var diskEpoch: Int = 0
 }
 
 nonisolated struct Evaluation: Sendable {
@@ -95,6 +97,7 @@ nonisolated struct Evaluation: Sendable {
     /// store discards this result instead of acting on stale information.
     let snapshotPath: String
     let snapshotIconID: UUID?
+    let snapshotEpoch: Int
     let location: Location
     let resolvedURL: URL?
     let fingerprint: DiskFingerprint?
@@ -114,14 +117,6 @@ nonisolated struct Evaluation: Sendable {
     }
 }
 
-/// Outcome of an off-main apply/restore.
-nonisolated struct ApplyOutcome: Sendable {
-    let id: UUID
-    let error: String?
-    let vanished: Bool
-    let fingerprint: DiskFingerprint?
-}
-
 // MARK: - Engine
 
 nonisolated enum Verifier {
@@ -133,11 +128,12 @@ nonisolated enum Verifier {
     // MARK: Evaluate
 
     static func evaluate(_ snapshot: ItemSnapshot) -> Evaluation {
-        let (location, url) = locate(snapshot)
+        let (location, url) = IconEngine.locate(path: snapshot.path, bookmark: snapshot.bookmark,
+                                              kind: snapshot.kind, bundleIdentifier: snapshot.bundleIdentifier)
 
         guard let url, location != .trashed, location != .missing else {
             return Evaluation(
-                id: snapshot.id, snapshotPath: snapshot.path, snapshotIconID: snapshot.iconID,
+                id: snapshot.id, snapshotPath: snapshot.path, snapshotIconID: snapshot.iconID, snapshotEpoch: snapshot.diskEpoch,
                 location: location, resolvedURL: url, fingerprint: nil,
                 hasCustomIcon: false, hasReference: false, driftScore: nil,
                 health: health(snapshot, location: location, url: url, hasCustomIcon: false, score: nil),
@@ -162,7 +158,7 @@ nonisolated enum Verifier {
         }
 
         return Evaluation(
-            id: snapshot.id, snapshotPath: snapshot.path, snapshotIconID: snapshot.iconID,
+            id: snapshot.id, snapshotPath: snapshot.path, snapshotIconID: snapshot.iconID, snapshotEpoch: snapshot.diskEpoch,
             location: location, resolvedURL: url, fingerprint: fingerprint,
             hasCustomIcon: hasCustomIcon, hasReference: hasReference, driftScore: score,
             health: health(snapshot, location: location, url: url, hasCustomIcon: hasCustomIcon, score: score),
@@ -190,67 +186,6 @@ nonisolated enum Verifier {
             }
             return results.compactMap { $0 }
         }
-    }
-
-    private static func locate(_ snapshot: ItemSnapshot) -> (Evaluation.Location, URL?) {
-        let fileManager = FileManager.default
-        if fileManager.fileExists(atPath: snapshot.path) {
-            let url = URL(fileURLWithPath: snapshot.path)
-            return (IconManager.isInTrash(url) ? .trashed : .atPath, url)
-        }
-        // Moved or renamed: bookmarks survive that — but also follow items into
-        // the Trash, which must be reported rather than adopted as a new home.
-        if let data = snapshot.bookmark {
-            var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
-               fileManager.fileExists(atPath: url.path) {
-                return (IconManager.isInTrash(url) ? .trashed : .relocated(url), url)
-            }
-        }
-        if snapshot.kind == .app, let bundleID = snapshot.bundleIdentifier,
-           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
-           fileManager.fileExists(atPath: url.path), !IconManager.isInTrash(url) {
-            return (.relocated(url), url)
-        }
-        return (.missing, nil)
-    }
-
-    // MARK: Apply / restore (off-main file work)
-
-    /// Applies an icon, stamps the recovery marker, and records the render
-    /// reference that future verification compares against.
-    static func apply(id: UUID, iconURL: URL, to url: URL, referenceURL: URL, marker: ManagedMarker?) -> ApplyOutcome {
-        do {
-            try IconManager.applyIcon(at: iconURL, to: url)
-        } catch {
-            let vanished = !FileManager.default.fileExists(atPath: url.path)
-            return ApplyOutcome(id: id, error: error.localizedDescription, vanished: vanished, fingerprint: nil)
-        }
-        if let marker { BundleMarker.write(marker, to: url) }
-        captureReference(of: url, to: referenceURL)
-        return ApplyOutcome(id: id, error: nil, vanished: false, fingerprint: DiskFingerprint.read(path: url.path))
-    }
-
-    static func restore(id: UUID, at url: URL) -> ApplyOutcome {
-        do {
-            try IconManager.removeCustomIcon(from: url)
-            BundleMarker.remove(from: url)
-            return ApplyOutcome(id: id, error: nil, vanished: false, fingerprint: DiskFingerprint.read(path: url.path))
-        } catch {
-            let vanished = !FileManager.default.fileExists(atPath: url.path)
-            return ApplyOutcome(id: id, error: error.localizedDescription, vanished: vanished, fingerprint: nil)
-        }
-    }
-
-    @discardableResult
-    static func captureReference(of url: URL, to referenceURL: URL) -> Bool {
-        (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: referenceURL,
-                                    pixelSize: referenceSize)) != nil
-    }
-
-    @discardableResult
-    static func captureBackup(of url: URL, to backupURL: URL) -> Bool {
-        (try? IconUtilities.savePNG(IconManager.captureCurrentIcon(of: url), to: backupURL)) != nil
     }
 
     // MARK: Health

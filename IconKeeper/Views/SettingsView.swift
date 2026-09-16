@@ -50,7 +50,7 @@ struct SettingsView: View {
                         Text("IconKeeper").font(.title3.weight(.semibold))
                         Text("Version \(appVersion) (\(buildNumber))")
                             .font(.callout).foregroundStyle(.secondary)
-                        Text("Keep your custom app icons through updates.")
+                        Text("Keep your custom app and folder icons through updates.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -65,7 +65,7 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("Automatically reapply icons after updates", isOn: $store.autoReapplyEnabled)
-                Text("IconKeeper also reacts instantly when an app bundle changes on disk. The interval above is a safety-net sweep.")
+                Text("IconKeeper also reacts instantly when a protected app or folder changes on disk. The interval above is a safety-net sweep.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -90,13 +90,13 @@ struct SettingsView: View {
                 }
                 .disabled(!store.backgroundProtectionEnabled)
                 LabeledContent("Agent status", value: store.backgroundAgentInstalled ? "Installed" : "Not installed")
-                Text("Installs a lightweight launchd agent that reapplies your icons after updates — at login and on the interval above — even if the app isn't running. There's no always-on process: the system briefly wakes the agent, it fixes any drift, and exits.")
+                Text("Installs a lightweight launchd agent that reapplies your icons after updates — at login and on the interval above — even if the app isn't running. There's no always-on process: the system briefly wakes the agent, it fixes any drift, and exits. It follows the auto-reapply setting above.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Maintenance") {
-                Button("Check all apps now") { store.sweepAll() }
+                Button("Check all items now") { store.sweepAll() }
                     .disabled(store.apps.isEmpty)
                 Button("Reapply all icons") { store.reapplyAll() }
                     .disabled(store.apps.isEmpty)
@@ -109,7 +109,7 @@ struct SettingsView: View {
                 Button("Reveal data in Finder") { store.revealDataInFinder() }
             }
             .confirmationDialog(
-                "Restore every app's original icon and pause protection?",
+                "Restore every item's original icon and pause protection?",
                 isPresented: $showRestoreAllConfirm,
                 titleVisibility: .visible
             ) {
@@ -119,9 +119,9 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: appVersion)
-                LabeledContent("Protected apps", value: "\(store.apps.count)")
+                LabeledContent("Protected items", value: "\(store.apps.count)")
                 LabeledContent("Library icons", value: "\(store.library.count)")
-                Text("IconKeeper runs outside the App Sandbox so it can write custom icons into other apps and watch them for updates. System apps protected by macOS (SIP) can't be modified.")
+                Text("IconKeeper runs outside the App Sandbox so it can write custom icons into apps and folders and watch them for updates. System apps protected by macOS (SIP) can't be modified.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -135,7 +135,7 @@ struct SettingsView: View {
 
             Section("Remove IconKeeper") {
                 Button("Prepare for uninstall…", role: .destructive) { showUninstallConfirm = true }
-                Text("Restores every app's original icon, turns off background protection, and removes the login agent — so you can safely delete IconKeeper. (Dragging the app to the Trash alone leaves your custom icons applied.)")
+                Text("Restores every item's original icon, turns off background protection, and removes the login agent — so you can safely delete IconKeeper. (Dragging the app to the Trash alone leaves your custom icons applied.)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

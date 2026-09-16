@@ -27,9 +27,9 @@ nonisolated struct ItemIndexEntry: Identifiable, Equatable, Sendable {
     /// Anything the user could act on, across both axes: a bad protection
     /// state, or a failing health check on an item that's otherwise fine.
     var needsAttention: Bool {
+        if status.needsAttention { return true }
         switch status {
-        case .drifted, .failed, .missing, .trashed, .externallyChanged: return true
-        case .paused: return false // deliberately switched off, not a problem
+        case .paused, .checking: return false // deliberate, or not known yet
         default: return health == .warning || health == .problem
         }
     }

@@ -3,7 +3,7 @@
 //  IconKeeper
 //
 //  A single recursive FSEvents stream over the directories that contain
-//  protected apps. One stream covers every tracked app at once, survives
+//  protected items. One stream covers every tracked item at once, survives
 //  atomic bundle replacement (it watches paths, not inodes), sees in-bundle
 //  edits (recursive), and — via a persisted last-event id — can replay
 //  changes that happened while IconKeeper wasn't running.
@@ -104,12 +104,17 @@ nonisolated final class FSEventsWatcher: @unchecked Sendable {
         FSEventStreamStart(stream)
     }
 
+    /// Tears the stream down on its own queue. The callback holds an
+    /// *unretained* pointer to this watcher and runs on `queue`; stopping there
+    /// guarantees no callback is mid-flight when the watcher goes away.
     func stop() {
-        guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-        self.stream = nil
+        queue.sync {
+            guard let stream else { return }
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
     }
 
     /// Invoked by the C callback (on `queue`) after each coalesced batch.

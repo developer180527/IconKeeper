@@ -33,10 +33,11 @@ enum Diagnostics {
             "entries": entries.map { entry in
                 [
                     "date": iso.string(from: entry.date),
-                    "kind": String(describing: entry.kind),
+                    "kind": entry.kind.rawValue,
                     "item": entry.appName,
+                    "itemID": entry.itemID?.uuidString ?? NSNull(),
                     "message": entry.message,
-                ]
+                ] as [String: Any]
             },
         ])
     }
@@ -57,7 +58,8 @@ enum Diagnostics {
                 "iconComparisons": stats.iconComparisons,
                 "autoReapplies": stats.autoReapplies,
                 "manualReapplies": stats.manualReapplies,
-                "autoReapplyPerMinute": (stats.autoReapplyRate * 100).rounded() / 100,
+                "coalescedReapplies": stats.coalescedReapplies,
+                "autoReapplyPerMinuteLast5Min": (stats.autoReapplyRate() * 100).rounded() / 100,
                 "loopGuardTrips": stats.loopGuardTrips,
             ],
             "library": [
@@ -93,7 +95,7 @@ enum Diagnostics {
     /// Writes `text` to a user-chosen file. Returns false if they cancelled.
     @discardableResult
     static func exportToFile(_ text: String, defaultName: String) -> Bool {
-        guard let url = Panels.chooseExportDestination(defaultName: defaultName) else { return false }
+        guard let url = Panels.chooseExportDestination(defaultName: defaultName, message: "Choose where to save the file.") else { return false }
         try? text.data(using: .utf8)?.write(to: url, options: .atomic)
         return true
     }

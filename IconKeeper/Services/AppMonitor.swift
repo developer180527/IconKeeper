@@ -2,7 +2,7 @@
 //  AppMonitor.swift
 //  IconKeeper
 //
-//  Coordinates change detection for all protected apps.
+//  Coordinates change detection for all protected items.
 //
 
 import CoreServices
@@ -12,41 +12,59 @@ import Foundation
 /// read from the watcher's background `@Sendable` callback).
 private nonisolated let fsEventsLastEventIdKey = "fsEventsLastEventId"
 
-/// Drives continuous monitoring of every protected app.
+/// What the monitor needs to know about an item to watch it.
+nonisolated struct WatchTarget: Sendable {
+    let id: UUID
+    let path: String
+    let isProtectionEnabled: Bool
+}
+
+/// Drives continuous monitoring of every protected item.
 ///
 /// Detection is event-first: a single recursive `FSEventsWatcher` over the
-/// directories that contain protected apps reacts to bundle replacement and
-/// in-bundle edits — one stream for all apps, surviving atomic updates. A
+/// directories that contain protected items reacts to bundle replacement and
+/// `Icon\r` edits — one stream for everything, surviving atomic updates. A
 /// low-frequency timer adds a safety-net sweep for anything events can't
-/// surface (icon-cache lag, volumes that come and go). Both paths funnel into
-/// the same `onSweep` action in `AppStore`.
+/// surface (icon-cache lag, volumes that come and go).
 @MainActor
 final class AppMonitor {
-    /// Called when something changed. `paths` are the specific changed file
-    /// paths to check; `fullScan == true` means re-verify everything (periodic
-    /// timer, or FSEvents signalled it dropped detail and we must rescan).
-    var onChange: (([String], Bool) -> Void)?
+    /// Called when something changed: the ids of items to re-check, or
+    /// `fullScan == true` to re-verify everything (periodic timer, or FSEvents
+    /// signalled it dropped detail).
+    var onChange: (([UUID], Bool) -> Void)?
 
     private var watcher: FSEventsWatcher?
     private var timer: Timer?
     private(set) var interval: TimeInterval
-    private var watchedPaths: [String] = []
+    private var watchedDirectories: [String] = []
+    /// Canonical item path → the items at that path.
+    private var idsByPath: [String: [UUID]] = [:]
+
+    private var syncTask: Task<Void, Never>?
+    private var pendingTargets: [WatchTarget]?
+    private var isRunning = false
 
     init(interval: TimeInterval = 30) {
         self.interval = interval
     }
 
-    func start(apps: [ProtectedApp]) {
-        syncWatchers(for: apps)
+    func start(targets: [WatchTarget]) {
+        isRunning = true
+        syncWatchers(targets)
         startTimer()
     }
 
     func stop() {
+        isRunning = false
+        syncTask?.cancel()
+        syncTask = nil
+        pendingTargets = nil
         timer?.invalidate()
         timer = nil
         watcher?.stop()
         watcher = nil
-        watchedPaths = []
+        watchedDirectories = []
+        idsByPath = [:]
     }
 
     func updateInterval(_ newValue: TimeInterval) {
@@ -54,45 +72,89 @@ final class AppMonitor {
         if timer != nil { startTimer() }
     }
 
-    /// Reconciles the FSEvents stream with the current app list. We watch the
-    /// parent directory of each tracked app (deduplicated), so the stream
-    /// covers wherever apps actually live — not just /Applications — and
-    /// catches a bundle being swapped out from under us.
-    func syncWatchers(for apps: [ProtectedApp]) {
-        let active = apps.filter { $0.isProtectionEnabled && $0.bundleExists }
-        let dirs = Set(active.map { $0.bundleURL.deletingLastPathComponent().path }).sorted()
-        // FSEvents reports canonical paths, so match against resolved ones.
-        let interesting = Set(active.map { $0.bundleURL.resolvingSymlinksInPath().path })
+    /// Reconciles the FSEvents stream with the current item list.
+    ///
+    /// Checking existence and resolving symlinks is disk work per item, so it
+    /// runs off the main thread, and bursts of calls (Restore All, a batch)
+    /// collapse into one pass over the latest list.
+    func syncWatchers(_ targets: [WatchTarget]) {
+        guard isRunning else { return }
+        pendingTargets = targets
+        guard syncTask == nil else { return }
+        syncTask = Task { [weak self] in
+            while let self, let targets = self.pendingTargets {
+                self.pendingTargets = nil
+                let plan = await Task.detached(priority: .utility) { Self.plan(targets) }.value
+                guard !Task.isCancelled, self.isRunning else { break }
+                if self.pendingTargets == nil { self.apply(plan) }
+            }
+            self?.syncTask = nil
+        }
+    }
+
+    private struct WatchPlan: Sendable {
+        var directories: [String]
+        var idsByPath: [String: [UUID]]
+    }
+
+    /// We watch the parent directory of each active item (deduplicated), so
+    /// the stream covers wherever items live and sees a bundle being swapped
+    /// out from under us.
+    private nonisolated static func plan(_ targets: [WatchTarget]) -> WatchPlan {
+        var directories = Set<String>()
+        var idsByPath: [String: [UUID]] = [:]
+        for target in targets where target.isProtectionEnabled {
+            guard FileManager.default.fileExists(atPath: target.path) else { continue }
+            let url = URL(fileURLWithPath: target.path)
+            directories.insert(url.deletingLastPathComponent().path)
+            // FSEvents reports canonical paths, so match against resolved ones.
+            idsByPath[url.resolvingSymlinksInPath().path, default: []].append(target.id)
+        }
+        return WatchPlan(directories: directories.sorted(), idsByPath: idsByPath)
+    }
+
+    private func apply(_ plan: WatchPlan) {
+        idsByPath = plan.idsByPath
+        let interesting = Set(plan.idsByPath.keys)
 
         // Same directories: keep the stream, just update what it forwards.
-        guard dirs != watchedPaths else {
+        guard plan.directories != watchedDirectories else {
             watcher?.setInterestingPaths(interesting)
             return
         }
 
         watcher?.stop()
-        watchedPaths = dirs
+        watchedDirectories = plan.directories
 
-        guard !dirs.isEmpty else {
+        guard !plan.directories.isEmpty else {
             watcher = nil
             return
         }
 
         let newWatcher = FSEventsWatcher(
-            paths: dirs,
+            paths: plan.directories,
             sinceWhen: loadLastEventId(),
-            onChange: { paths, fullScan in
+            onChange: { [weak self] paths, fullScan in
                 // Delivered on the FSEvents queue; hop to the main actor.
-                Task { @MainActor [weak self] in self?.onChange?(paths, fullScan) }
+                Task { @MainActor [weak self] in self?.deliver(paths: paths, fullScan: fullScan) }
             },
             persistEventId: { id in
-                // No main-actor state touched here; UserDefaults is thread-safe.
                 UserDefaults.standard.set(NSNumber(value: id), forKey: fsEventsLastEventIdKey)
             }
         )
         newWatcher.setInterestingPaths(interesting)
         watcher = newWatcher
         newWatcher.start()
+    }
+
+    private func deliver(paths: [String], fullScan: Bool) {
+        if fullScan {
+            onChange?([], true)
+            return
+        }
+        var ids: [UUID] = []
+        for path in paths { ids.append(contentsOf: idsByPath[path] ?? []) }
+        if !ids.isEmpty { onChange?(ids, false) }
     }
 
     // MARK: - Private
@@ -106,9 +168,9 @@ final class AppMonitor {
 
     private func startTimer() {
         timer?.invalidate()
-        let newTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
+        let newTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             // Periodic safety net: re-verify everything.
-            Task { @MainActor [weak self] in self?.onChange?([], true) }
+            MainActor.assumeIsolated { self?.onChange?([], true) }
         }
         newTimer.tolerance = interval * 0.2
         timer = newTimer

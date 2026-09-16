@@ -46,7 +46,7 @@ struct ProtectedAppRow: View, Equatable {
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
             } else if entry.status == .trashed {
-                Button("Remove") { store.removeApp(entry.id) }
+                Button("Remove") { store.removeItem(entry.id) }
                     .controlSize(.small)
                     .help("Stop tracking this item — it's in the Trash")
             } else if let health = entry.health, health != .unknown {
@@ -110,7 +110,7 @@ struct ProtectedAppRow: View, Equatable {
         }
         Divider()
         Button("Remove from IconKeeper", systemImage: "trash", role: .destructive) {
-            store.removeApp(entry.id)
+            store.removeItem(entry.id)
         }
     }
 }

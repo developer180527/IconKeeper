@@ -7,15 +7,10 @@
 //  decision is actually made on.
 //
 
-import Combine
 import SwiftUI
 
 struct DeveloperView: View {
     @Environment(AppStore.self) private var store
-    @State private var tick = Date()
-
-    /// Redraw periodically so the counters read as live.
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var stats: EngineStats { store.stats }
 
@@ -33,7 +28,31 @@ struct DeveloperView: View {
     }
 
     var body: some View {
-        Form {
+        // The counters aren't observed (they change constantly), so redraw on
+        // a clock. A timer that only wrote unread @State never redrew anything.
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            form(now: context.date)
+        }
+        .navigationTitle("Developer")
+        .toolbar {
+            ToolbarItemGroup {
+                Menu {
+                    Button("Copy stats as JSON", systemImage: "doc.on.doc") {
+                        Diagnostics.copyToPasteboard(statsJSON)
+                    }
+                    Button("Export stats as JSON…", systemImage: "square.and.arrow.up") {
+                        Diagnostics.exportToFile(statsJSON, defaultName: "IconKeeper Diagnostics.json")
+                    }
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+        }
+    }
+
+    private func form(now: Date) -> some View {
+        let rate = stats.autoReapplyRate(now: now)
+        return Form {
             Section {
                 Text("These are live internals, not settings. Use them to see how IconKeeper behaves on your machine — especially whether it is reapplying icons more often than it should.")
                     .font(.caption)
@@ -41,7 +60,7 @@ struct DeveloperView: View {
             }
 
             Section("Engine activity") {
-                metric("Uptime", Self.duration(since: stats.startedAt))
+                metric("Uptime", Self.duration(since: stats.startedAt, now: now))
                 // The watcher discards churn beneath protected items, so these
                 // count only events that could actually change an icon.
                 metric("Relevant FSEvents batches", "\(stats.fsEventBatches)")
@@ -53,22 +72,23 @@ struct DeveloperView: View {
 
             Section("Reapply behaviour") {
                 metric("Manual reapplies", "\(stats.manualReapplies)")
+                metric("Duplicate reapplies absorbed", "\(stats.coalescedReapplies)")
                 LabeledContent("Automatic reapplies") {
                     HStack(spacing: 6) {
                         Text("\(stats.autoReapplies)").monospacedDigit()
-                        if stats.autoReapplyRate > 1 {
-                            Text(String(format: "%.1f/min", stats.autoReapplyRate))
+                        if rate > 1 {
+                            Text(String(format: "%.1f/min", rate))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.red)
                         }
                     }
                 }
                 metric("Loop-guard trips", "\(stats.loopGuardTrips)")
-                Text(stats.autoReapplyRate > 1
-                     ? "⚠️ Automatic reapplies are running hot. On an idle machine this should be near zero — a sustained rate means the verifier and macOS disagree about what the icon looks like."
-                     : "Idle machines should sit near zero automatic reapplies per minute.")
+                Text(rate > 1
+                     ? "⚠️ Automatic reapplies are running hot (last 5 minutes). On an idle machine this should be near zero — a sustained rate means the verifier and macOS disagree about what the icon looks like."
+                     : "Rate is measured over the last 5 minutes. Idle machines should sit near zero automatic reapplies per minute.")
                     .font(.caption)
-                    .foregroundStyle(stats.autoReapplyRate > 1 ? .red : .secondary)
+                    .foregroundStyle(rate > 1 ? .red : .secondary)
             }
 
             Section("Drift scores") {
@@ -112,22 +132,6 @@ struct DeveloperView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Developer")
-        .onReceive(timer) { tick = $0 }
-        .toolbar {
-            ToolbarItemGroup {
-                Menu {
-                    Button("Copy stats as JSON", systemImage: "doc.on.doc") {
-                        Diagnostics.copyToPasteboard(statsJSON)
-                    }
-                    Button("Export stats as JSON…", systemImage: "square.and.arrow.up") {
-                        Diagnostics.exportToFile(statsJSON, defaultName: "IconKeeper Diagnostics.json")
-                    }
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                }
-            }
-        }
     }
 
     /// Everything Developer Mode shows, as JSON — copyable or exportable so a
@@ -137,7 +141,7 @@ struct DeveloperView: View {
             stats: store.stats,
             apps: store.apps,
             driftScores: store.lastDriftScore,
-            loopGuarded: store.loopGuarded,
+            loopGuarded: Set(store.runtime.filter { $0.value.loopGuarded }.keys),
             libraryCount: store.library.count
         )
     }
@@ -146,8 +150,8 @@ struct DeveloperView: View {
         LabeledContent(label) { Text(value).monospacedDigit() }
     }
 
-    private static func duration(since date: Date) -> String {
-        let seconds = Int(Date().timeIntervalSince(date))
+    private static func duration(since date: Date, now: Date) -> String {
+        let seconds = Int(now.timeIntervalSince(date))
         if seconds < 60 { return "\(seconds)s" }
         if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
         return "\(seconds / 3600)h \((seconds % 3600) / 60)m"

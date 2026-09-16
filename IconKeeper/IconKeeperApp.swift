@@ -16,6 +16,14 @@ struct IconKeeperMain {
         if CommandLine.arguments.dropFirst().contains("--agent") {
             AgentRunner.runAndExit() // never returns
         }
+        // Hosting unit tests: run a bare application so the tests can load,
+        // without the store touching the real configuration or any icons.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            app.run()
+            return
+        }
         IconKeeperApp.main()
     }
 }
@@ -28,10 +36,7 @@ struct IconKeeperApp: App {
         WindowGroup(id: "main") {
             ContentView()
                 .environment(store)
-                .onAppear {
-                    store.startMonitoring()
-                    NotificationManager.shared.requestAuthorization()
-                }
+                .onAppear { startServices() }
         }
         .windowResizability(.contentMinSize)
         .commands {
@@ -40,6 +45,7 @@ struct IconKeeperApp: App {
 
         Settings {
             SettingsView()
+                .windowErrorAlert()
                 .environment(store)
                 .frame(width: 480, height: 560)
         }
@@ -50,16 +56,29 @@ struct IconKeeperApp: App {
         } label: {
             // A view, not an expression in the App body: reading the store here
             // would re-evaluate every scene whenever any count changed.
-            MenuBarLabel().environment(store)
+            // The label is always on screen, so monitoring starts even when
+            // the app launches with no window (login item, closed at quit).
+            MenuBarLabel(onAppear: startServices).environment(store)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    private func startServices() {
+        store.startMonitoring()
+        if PersistenceController.dataDirectoryOverride == nil {
+            NotificationManager.shared.requestAuthorization()
+        } else {
+            NotificationManager.shared.isEnabled = false
+        }
     }
 }
 
 private struct MenuBarLabel: View {
     @Environment(AppStore.self) private var store
+    var onAppear: () -> Void
     var body: some View {
         Image(systemName: store.summary.needsAttention > 0 ? "exclamationmark.shield.fill" : "checkmark.shield")
+            .onAppear(perform: onAppear)
     }
 }
 

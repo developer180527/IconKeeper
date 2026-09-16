@@ -41,7 +41,7 @@ struct AddAppView: View {
     private func refreshItemPreviews() {
         itemPreviews = itemURLs.prefix(4).map { url in
             ItemPreview(id: url,
-                        icon: IconUtilities.currentIcon(forPath: url.path),
+                        icon: IconManager.captureCurrentIcon(of: url),
                         name: IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app))
         }
     }
@@ -88,6 +88,7 @@ struct AddAppView: View {
             actions: { Button("OK", role: .cancel) {} },
             message: { Text(errorMessage ?? "") }
         )
+        .sheetErrorAlert()
     }
 
     // MARK: - Header / footer
@@ -225,7 +226,7 @@ struct AddAppView: View {
     private var iconPickerMenu: some View {
         Menu("Choose…") {
             Button("From File…", systemImage: "folder") {
-                if let url = Panels.chooseIcons().first { iconChoice = .file(url) }
+                if let url = Panels.chooseIcons(allowsMultiple: false).first { iconChoice = .file(url) }
             }
             if !store.library.isEmpty {
                 Divider()
@@ -335,7 +336,10 @@ struct AddAppView: View {
                 .truncationMode(.middle)
                 .frame(width: 260)
 
-            Button("Stop", role: .destructive) { batchTask?.cancel() }
+            Button("Stop", role: .destructive) {
+                store.cancelBatch()
+                batchTask?.cancel()
+            }
                 .controlSize(.large)
         }
         .padding(28)

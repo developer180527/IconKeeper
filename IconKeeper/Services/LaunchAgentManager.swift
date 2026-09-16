@@ -3,7 +3,7 @@
 //  IconKeeper
 //
 //  Installs/removes a launchd LaunchAgent that watches the app folders and
-//  relaunches IconKeeper's binary in `--agent` mode on a change — giving
+//  runs IconKeeper's binary in `--agent` mode periodically — giving
 //  protection even when the GUI app isn't running.
 //
 //  The plist is written at runtime (not bundled) so it can point at the app's
@@ -19,14 +19,15 @@
 
 import Foundation
 
-@MainActor
-enum LaunchAgentManager {
+/// Everything here shells out to `launchctl` and waits, so callers run it off
+/// the main thread.
+nonisolated enum LaunchAgentManager {
     static let label = "developer180527.IconKeeper.Agent"
 
     /// Default cadence (seconds) for the agent's drift sweep. Offline drift only
     /// happens on app updates, which are infrequent — 10 minutes keeps latency
     /// low at negligible cost (each run is milliseconds).
-    nonisolated static let sweepInterval = 600
+    static let sweepInterval = 600
 
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -63,7 +64,13 @@ enum LaunchAgentManager {
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: plistURL, options: .atomic)
 
-        reload()
+        // bootstrap is what actually schedules the agent. If launchd refuses,
+        // don't leave a plist behind that makes the setting read as "on".
+        let status = reload()
+        if status != 0 {
+            try? FileManager.default.removeItem(at: plistURL)
+            throw LaunchAgentError.bootstrapFailed(status)
+        }
     }
 
     /// Unloads and removes the LaunchAgent.
@@ -100,9 +107,9 @@ enum LaunchAgentManager {
 
     private static var domain: String { "gui/\(getuid())" }
 
-    private static func reload() {
+    private static func reload() -> Int32 {
         bootout()
-        runLaunchctl(["bootstrap", domain, plistURL.path])
+        return runLaunchctl(["bootstrap", domain, plistURL.path])
     }
 
     private static func bootout() {
@@ -122,6 +129,16 @@ enum LaunchAgentManager {
             return process.terminationStatus
         } catch {
             return -1
+        }
+    }
+}
+
+nonisolated enum LaunchAgentError: LocalizedError {
+    case bootstrapFailed(Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .bootstrapFailed(let status): "launchd refused to load the background agent (launchctl exit \(status))."
         }
     }
 }

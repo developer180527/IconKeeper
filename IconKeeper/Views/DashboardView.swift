@@ -2,7 +2,7 @@
 //  DashboardView.swift
 //  IconKeeper
 //
-//  The main list of protected apps, their statuses, and quick actions.
+//  The main list of protected items, their statuses, and quick actions.
 //
 
 import SwiftUI
@@ -45,7 +45,7 @@ struct DashboardView: View {
         }
     }
 
-    /// Protection state — mutually exclusive, straight from `runtimeStatus`.
+    /// Protection state — mutually exclusive, derived from each item's runtime state.
     ///
     /// This is only *one* of the two things that can be wrong with an item. An
     /// item is in exactly one protection state, but its health is a separate,
@@ -53,15 +53,16 @@ struct DashboardView: View {
     /// problems. Collapsing both into one control made "Needs Attention" miss
     /// every item whose status was fine but whose health wasn't.
     private enum StateFilter: String, CaseIterable, Identifiable {
-        case any, protectedOnly, paused, drifted, iconChanged, inTrash, missing, error
+        case any, protectedOnly, checking, paused, drifted, iconChanged, inTrash, missing, error
         var id: String { rawValue }
 
         var label: String {
             switch self {
             case .any: "Any State"
             case .protectedOnly: "Protected"
+            case .checking: "Checking"
             case .paused: "Paused"
-            case .drifted: "Restoring"
+            case .drifted: "Icon Reset"
             case .iconChanged: "Icon Changed"
             case .inTrash: "In Trash"
             case .missing: "Missing"
@@ -73,6 +74,7 @@ struct DashboardView: View {
             switch self {
             case .any: "line.3.horizontal.decrease"
             case .protectedOnly: "checkmark.shield"
+            case .checking: "ellipsis.circle"
             case .paused: "pause.circle"
             case .drifted: "arrow.triangle.2.circlepath"
             case .iconChanged: "person.crop.circle.badge.questionmark"
@@ -85,7 +87,8 @@ struct DashboardView: View {
         func matches(_ status: AppStatus) -> Bool {
             switch (self, status) {
             case (.any, _): true
-            case (.protectedOnly, .protected), (.protectedOnly, .applying): true
+            case (.protectedOnly, .protected), (.protectedOnly, .applying), (.protectedOnly, .restoring): true
+            case (.checking, .checking): true
             case (.paused, .paused): true
             case (.drifted, .drifted): true
             case (.iconChanged, .externallyChanged): true
@@ -223,11 +226,15 @@ struct DashboardView: View {
                     .help("Relaunch the Dock to clear stubborn icon caches.")
                     Divider()
                     Button("Export Configuration…", systemImage: "square.and.arrow.up") {
-                        store.exportConfiguration()
+                        if let url = Panels.chooseExportDestination(defaultName: "IconKeeper Configuration.json") {
+                            store.exportConfiguration(to: url)
+                        }
                     }
                     .disabled(store.apps.isEmpty && store.library.isEmpty)
                     Button("Import Configuration…", systemImage: "square.and.arrow.down") {
-                        store.importConfiguration()
+                        if let url = Panels.chooseImportFile() {
+                            store.importConfiguration(from: url)
+                        }
                     }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")

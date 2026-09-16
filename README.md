@@ -62,7 +62,10 @@ Monitoring cadence, notifications, startup, background protection, and maintenan
 - **Icon override, not destruction.** IconKeeper uses `NSWorkspace.setIcon`, which stores your icon as an `Icon\r` resource inside the directory — the app's real icon in `Contents/Resources` is never touched. Restoring just removes the override, revealing the item's *current* genuine icon.
 - **Folders work the same way.** A folder stores its custom icon in exactly the same `Icon\r` file an app bundle does, so protection, drift detection, and restore behave identically. Folders rarely drift, since nothing replaces them the way an update replaces an app.
 - **Individual files aren't supported — deliberately.** A regular file has nowhere to put an `Icon\r`, so macOS keeps its custom icon in the file's resource fork. That is destroyed every time an app saves the file atomically (which most apps do), taking IconKeeper's own tracking metadata with it. Supporting files would mean fighting every save, so IconKeeper declines them with a clear message instead.
-- **Drift detection.** Protection means *your specific* icon is applied — not merely that some custom icon exists. IconKeeper compares the on-disk icon to your asset, so a third-party or manual change is caught too.
+- **Drift detection.** Protection means *your specific* icon is applied — not merely that some custom icon exists. IconKeeper records how macOS renders your icon when it applies it and compares against that, so a third-party or manual change is caught too — and IconKeeper asks before overwriting one. A removed icon (an update) is put back automatically; a *different* icon (someone's deliberate choice) is left alone until you choose Keep Mine or Adopt.
+- **One policy, one write path.** The decision about what to do with a check's result is a single pure function shared by the app and the background agent, and every icon write goes through the same engine — backups, the recovery marker, and the drift reference are handled identically everywhere.
+- **Your folders stay sorted.** Applying an icon to a folder writes inside it, which would change its Date Modified; IconKeeper puts the original date back.
+- **Storage is deduplicated.** Library icons, original-icon backups, and render references are stored by content, so a thousand folders sharing the default folder icon share one backup.
 - **Monitoring.** A single FSEvents stream over the parent directories of everything you protect reacts to bundle replacement and in-place edits (targeted to just the affected item), backed by a periodic safety-net sweep.
 - **Background protection.** An optional launchd LaunchAgent re-checks at login and on an interval; each run is a short-lived process that fixes drift and exits — there is no resident daemon.
 - **System apps are respected.** Built-in apps on the read-only system volume (SIP) are detected by volume and never modified.
@@ -85,6 +88,17 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 ```
 
 Or just open `IconKeeper.xcodeproj` in Xcode and run.
+
+### Tests
+
+The engine — drift policy, apply/restore, import planning, storage — is covered by unit and integration tests (`IconKeeperTests`, Swift Testing). Integration tests work on throwaway folders and a scratch data directory; they never touch your configuration or icons.
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcodebuild -scheme IconKeeper -destination 'platform=macOS' test
+```
+
+Debug builds can also be run against throwaway data by setting `ICONKEEPER_DATA_DIR` to an empty folder; in that mode the app leaves the LaunchAgent and notification permission alone.
 
 ## Releases
 

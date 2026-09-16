@@ -18,11 +18,6 @@ private final class ItemPanelDelegate: NSObject, NSOpenSavePanelDelegate {
 }
 
 enum Panels {
-    /// Prompts the user to choose a `.app` bundle.
-    static func chooseApplication() -> URL? {
-        chooseItems(allowsMultiple: false).first
-    }
-
     /// Prompts the user to choose apps and/or folders to protect.
     ///
     /// An `.app` is a *file package*, which the panel reports as a file rather
@@ -48,11 +43,11 @@ enum Panels {
     }
 
     /// Prompts the user to choose one or more icon image files.
-    static func chooseIcons() -> [URL] {
+    static func chooseIcons(allowsMultiple: Bool = true) -> [URL] {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
+        panel.allowsMultipleSelection = allowsMultiple
         panel.allowedContentTypes = IconUtilities.acceptedIconTypes
         panel.prompt = "Add Icon"
         panel.message = "Select icon image files (.icns, .png, …)."
@@ -60,12 +55,12 @@ enum Panels {
     }
 
     /// Prompts for a destination to save an exported configuration.
-    static func chooseExportDestination(defaultName: String) -> URL? {
+    static func chooseExportDestination(defaultName: String, message: String = "Choose where to save your IconKeeper configuration.") -> URL? {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = defaultName
         panel.prompt = "Export"
-        panel.message = "Choose where to save your IconKeeper configuration."
+        panel.message = message
         return panel.runModal() == .OK ? panel.url : nil
     }
 

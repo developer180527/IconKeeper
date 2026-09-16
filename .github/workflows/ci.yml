@@ -40,3 +40,14 @@ jobs:
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
             clean build
+
+      - name: Test
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project IconKeeper.xcodeproj \
+            -scheme IconKeeper \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            test
