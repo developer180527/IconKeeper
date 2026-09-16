@@ -19,10 +19,38 @@ nonisolated struct ItemIndexEntry: Identifiable, Equatable, Sendable {
     let name: String
     let path: String
     let iconID: UUID?
+    /// The assigned library icon's file, resolved when the index is built so
+    /// rows never look anything up in the store.
+    let iconURL: URL?
     let isProtectionEnabled: Bool
     let status: AppStatus
     /// `nil` until the engine has evaluated this item at least once.
     let health: HealthLevel?
+    let dateAdded: Date
+    let lastApplied: Date?
+
+    init(id: UUID, kind: ItemKind, name: String, path: String, iconID: UUID?, iconURL: URL? = nil, isProtectionEnabled: Bool,
+         status: AppStatus, health: HealthLevel?, dateAdded: Date = .distantPast, lastApplied: Date? = nil) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.path = path
+        self.iconID = iconID
+        self.iconURL = iconURL
+        self.isProtectionEnabled = isProtectionEnabled
+        self.status = status
+        self.health = health
+        self.dateAdded = dateAdded
+        self.lastApplied = lastApplied
+    }
+
+    /// Health that's worth pointing out on an otherwise fine item.
+    var healthConcern: HealthLevel? {
+        switch health {
+        case .warning, .problem: health
+        default: nil
+        }
+    }
 
     /// Anything the user could act on, across both axes: a bad protection
     /// state, or a failing health check on an item that's otherwise fine.

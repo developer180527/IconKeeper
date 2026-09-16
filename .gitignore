@@ -17,3 +17,4 @@ xcuserdata/
 *.dmg
 # IconKeeper's own custom-folder-icon marker on this repo
 Icon?
+dist/

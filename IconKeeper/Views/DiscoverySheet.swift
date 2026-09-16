@@ -33,9 +33,7 @@ struct DiscoverySheet: View {
             } else {
                 List(store.discoveredOrphans) { item in
                     HStack(spacing: 10) {
-                        Image(nsImage: IconManager.captureCurrentIcon(of: URL(fileURLWithPath: item.bundlePath)))
-                            .resizable()
-                            .frame(width: 32, height: 32)
+                        WorkspaceIcon(path: item.bundlePath, size: 32)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(item.displayName).font(.callout.weight(.medium))
                             Text(item.bundlePath)

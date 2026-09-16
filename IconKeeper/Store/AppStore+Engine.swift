@@ -262,7 +262,6 @@ extension AppStore {
             guard let position = position(of: id) else { return }
             if let backup = result.backupFilename {
                 apps[position].originalIconBackupFilename = backup
-                imageCache.removeObject(forKey: backupCacheKey(backup))
             }
             if let reference = result.referenceFilename {
                 apps[position].appliedRenderFilename = reference
@@ -361,10 +360,6 @@ extension AppStore {
             self.fingerprints[id] = nil
             self.lastDriftScore[id] = nil
         }
-    }
-
-    func backupCacheKey(_ filename: String) -> NSString {
-        (persistence.backups.url(for: filename)?.path ?? filename) as NSString
     }
 
     // MARK: - Background agent hand-off

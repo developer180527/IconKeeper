@@ -79,10 +79,8 @@ struct MenuBarView: View {
 
     private func row(for entry: ItemIndexEntry) -> some View {
         HStack(spacing: 9) {
-            if let image = store.libraryIconImage(entry.iconID) {
-                Image(nsImage: image).resizable().frame(width: 22, height: 22)
-            } else {
-                StatusDot(status: entry.status).frame(width: 22)
+            IconThumbnail(url: entry.iconURL, size: 22) {
+                StatusDot(status: entry.status)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name).font(.callout).lineLimit(1)

@@ -97,15 +97,15 @@ struct SettingsView: View {
 
             Section("Maintenance") {
                 Button("Check all items now") { store.sweepAll() }
-                    .disabled(store.apps.isEmpty)
+                    .disabled(store.summary.total == 0)
                 Button("Reapply all icons") { store.reapplyAll() }
-                    .disabled(store.apps.isEmpty)
+                    .disabled(store.summary.total == 0)
                 Button("Refresh Dock icons") { store.forceDockRefresh() }
                 Button("Scan for existing icons") { store.discoverOrphans(); showDiscovery = true }
                 Button("Restore all original icons", role: .destructive) { showRestoreAllConfirm = true }
-                    .disabled(store.apps.isEmpty)
+                    .disabled(store.summary.total == 0)
                 Button("Reset reapply statistics") { store.resetDriftStatistics() }
-                    .disabled(store.apps.isEmpty)
+                    .disabled(store.summary.total == 0)
                 Button("Reveal data in Finder") { store.revealDataInFinder() }
             }
             .confirmationDialog(
@@ -119,7 +119,7 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: appVersion)
-                LabeledContent("Protected items", value: "\(store.apps.count)")
+                LabeledContent("Protected items", value: "\(store.summary.total)")
                 LabeledContent("Library icons", value: "\(store.library.count)")
                 Text("IconKeeper runs outside the App Sandbox so it can write custom icons into apps and folders and watch them for updates. System apps protected by macOS (SIP) can't be modified.")
                     .font(.caption)

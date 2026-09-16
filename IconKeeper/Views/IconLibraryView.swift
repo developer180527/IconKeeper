@@ -84,15 +84,10 @@ struct IconLibraryView: View {
     private func tile(for item: IconLibraryItem) -> some View {
         let usageCount = store.summary.iconUsage[item.id, default: 0]
         return VStack(spacing: 8) {
-            Group {
-                if let image = store.libraryIconImage(for: item) {
-                    Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
-                } else {
-                    RoundedRectangle(cornerRadius: 12).fill(.quaternary)
-                        .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
-                }
+            IconThumbnail(url: store.libraryIconURL(for: item), size: 96) {
+                RoundedRectangle(cornerRadius: 12).fill(.quaternary)
+                    .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
             }
-            .frame(width: 96, height: 96)
 
             Text(item.name)
                 .font(.callout.weight(.medium))
@@ -175,9 +170,7 @@ private struct BatchApplySheet: View {
             } else {
                 List(store.apps, selection: $selected) { app in
                     HStack {
-                        if let image = store.libraryIconImage(app.customIconID) {
-                            Image(nsImage: image).resizable().frame(width: 24, height: 24)
-                        }
+                        IconThumbnail(url: store.libraryIconURL(app.customIconID), size: 24) { Color.clear }
                         Text(app.displayName)
                         Spacer()
                         // Names repeat (an app and a folder both called "Notepad").

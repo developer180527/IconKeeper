@@ -27,30 +27,31 @@ struct AddAppView: View {
     @State private var errorMessage: String?
     @State private var batchTask: Task<Void, Never>?
 
-    /// Previews are loaded once per selection change, not in the body. The
-    /// body re-runs on every batch progress tick, and it used to decode the
-    /// icon file and read each item's Info.plist on every one of them.
-    private struct ItemPreview: Identifiable {
+    /// Names are read off the main thread once per selection change (reading
+    /// an app's Info.plist is disk I/O); icons load through `WorkspaceIcon` and
+    /// `IconThumbnail`. The body re-runs on every batch progress tick, so it
+    /// must never do that work itself.
+    private struct ItemPreview: Identifiable, Sendable {
         let id: URL
-        let icon: NSImage
         let name: String
     }
     @State private var itemPreviews: [ItemPreview] = []
-    @State private var iconPreview: NSImage?
 
-    private func refreshItemPreviews() {
-        itemPreviews = itemURLs.prefix(4).map { url in
-            ItemPreview(id: url,
-                        icon: IconManager.captureCurrentIcon(of: url),
-                        name: IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app))
-        }
+    private func loadItemPreviews() async {
+        let urls = Array(itemURLs.prefix(4))
+        let previews = await Task.detached(priority: .userInitiated) {
+            urls.map { url in
+                ItemPreview(id: url, name: IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app))
+            }
+        }.value
+        if !Task.isCancelled { itemPreviews = previews }
     }
 
-    private func refreshIconPreview() {
+    private var iconPreviewURL: URL? {
         switch iconChoice {
-        case .file(let url): iconPreview = NSImage(contentsOf: url)
-        case .library(let item): iconPreview = store.libraryIconImage(for: item)
-        case nil: iconPreview = nil
+        case .file(let url): url
+        case .library(let item): store.libraryIconURL(for: item)
+        case nil: nil
         }
     }
 
@@ -80,8 +81,7 @@ struct AddAppView: View {
             }
         }
         .onAppear { if let initialAppURL { itemURLs = [initialAppURL] + additionalURLs } }
-        .onChange(of: itemURLs, initial: true) { refreshItemPreviews() }
-        .onChange(of: iconChoice, initial: true) { refreshIconPreview() }
+        .task(id: itemURLs) { await loadItemPreviews() }
         .alert(
             "Couldn't Apply Icon",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }),
@@ -138,9 +138,7 @@ struct AddAppView: View {
                     batchSummary
                 } else if let preview = itemPreviews.first {
                     VStack(spacing: 10) {
-                        Image(nsImage: preview.icon)
-                            .resizable().interpolation(.high)
-                            .frame(width: 84, height: 84)
+                        WorkspaceIcon(path: preview.id.path, size: 84)
                         Text(preview.name)
                             .font(.headline)
                             .lineLimit(1)
@@ -166,9 +164,7 @@ struct AddAppView: View {
         VStack(spacing: 10) {
             HStack(spacing: -18) {
                 ForEach(itemPreviews) { preview in
-                    Image(nsImage: preview.icon)
-                        .resizable().interpolation(.high)
-                        .frame(width: 56, height: 56)
+                    WorkspaceIcon(path: preview.id.path, size: 56)
                         .shadow(radius: 1)
                 }
             }
@@ -200,11 +196,11 @@ struct AddAppView: View {
             if let url = urls.first { iconChoice = .file(url) }
         } content: { targeted in
             cardChrome(targeted: targeted, filled: iconChoice != nil) {
-                if let preview = iconPreview {
+                if let previewURL = iconPreviewURL {
                     VStack(spacing: 10) {
-                        Image(nsImage: preview)
-                            .resizable().interpolation(.high)
-                            .frame(width: 84, height: 84)
+                        IconThumbnail(url: previewURL, size: 84) {
+                            ProgressView().controlSize(.small)
+                        }
                         Text(newIconName)
                             .font(.headline)
                             .lineLimit(1)

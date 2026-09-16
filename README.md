@@ -89,6 +89,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 Or just open `IconKeeper.xcodeproj` in Xcode and run.
 
+### Packaging a DMG
+
+```bash
+scripts/make-dmg.sh   # builds Release and writes dist/IconKeeper-<version>.dmg
+```
+
+The installer window's artwork is drawn by `scripts/dmg/render-background.swift` (1x and 2x), so it stays sharp and can be restyled in code. Set `SIGN_IDENTITY` to also code-sign the image. Requires `create-dmg` (`brew install create-dmg`).
+
 ### Tests
 
 The engine — drift policy, apply/restore, import planning, storage — is covered by unit and integration tests (`IconKeeperTests`, Swift Testing). Integration tests work on throwaway folders and a scratch data directory; they never touch your configuration or icons.

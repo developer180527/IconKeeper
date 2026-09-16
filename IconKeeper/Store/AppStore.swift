@@ -28,7 +28,9 @@ final class AppStore {
         // array on every in-place edit, making loops over items quadratic.
         didSet { scheduleIndexRebuild() }
     }
-    var library: [IconLibraryItem] = []
+    var library: [IconLibraryItem] = [] {
+        didSet { scheduleIndexRebuild() } // rows carry their icon's file
+    }
     var activity: [ActivityEntry] = []
 
     /// Latest health report per item. Observed, so an open detail sheet
@@ -131,16 +133,6 @@ final class AppStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var isRevertingSetting = false
     @ObservationIgnored private var launchAgentTail: Task<Void, Never>?
-
-    /// Decoded-image cache, bounded by memory as well as count: a 1024px
-    /// backup decodes to ~4 MB, so a count limit alone let a few hundred of
-    /// them pin hundreds of megabytes.
-    @ObservationIgnored let imageCache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 500
-        cache.totalCostLimit = 96 * 1024 * 1024
-        return cache
-    }()
 
     // MARK: - Engine bookkeeping (not observed)
 
@@ -457,12 +449,16 @@ final class AppStore {
         indexRebuildScheduled = false
         var entries: [ItemIndexEntry] = []
         entries.reserveCapacity(apps.count)
+        var iconURLs: [UUID: URL] = [:]
+        for item in library { iconURLs[item.id] = persistence.libraryFileURL(for: item.filename) }
         var next = StoreSummary()
         for app in apps {
             let entry = ItemIndexEntry(
                 id: app.id, kind: app.kind, name: app.displayName, path: app.bundlePath,
-                iconID: app.customIconID, isProtectionEnabled: app.isProtectionEnabled,
-                status: status(for: app), health: healthByID[app.id]?.overall
+                iconID: app.customIconID, iconURL: app.customIconID.flatMap { iconURLs[$0] },
+                isProtectionEnabled: app.isProtectionEnabled,
+                status: status(for: app), health: healthByID[app.id]?.overall,
+                dateAdded: app.dateAdded, lastApplied: app.lastAppliedDate
             )
             entries.append(entry)
             next.total += 1

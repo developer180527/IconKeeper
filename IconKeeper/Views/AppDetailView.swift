@@ -13,10 +13,6 @@ struct AppDetailView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    /// Read off the main thread, and refreshed when something about the item changes.
-    @State private var iconOnDisk: NSImage?
-    @State private var iconOnDiskLoaded = false
-
     private var app: ProtectedApp? { store.item(appID) }
 
     var body: some View {
@@ -61,7 +57,7 @@ struct AppDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    iconComparison(for: app)
+                    iconComparison(for: app, status: status)
                     // `healthByID` is observed, so this follows every check change.
                     HealthSection(health: store.health(for: app.id))
                     statsGrid(for: app)
@@ -75,43 +71,41 @@ struct AppDetailView: View {
         }
         .frame(width: 560, height: 600)
         .task { store.scheduleVerify([app.id]) } // fresh health, off-main
-        .task(id: IconRefreshKey(status: status, lastApplied: app.lastAppliedDate, path: app.bundlePath)) {
-            iconOnDisk = await store.currentIcon(of: app)
-            iconOnDiskLoaded = true
-        }
     }
 
     private struct IconRefreshKey: Equatable {
         let status: AppStatus
         let lastApplied: Date?
-        let path: String
     }
 
     // MARK: - Icons
 
-    private func iconComparison(for app: ProtectedApp) -> some View {
+    private func iconComparison(for app: ProtectedApp, status: AppStatus) -> some View {
         HStack(spacing: 12) {
-            iconTile("Original", image: store.originalIconImage(app), fallback: "questionmark")
+            iconTile("Original") { thumbnail(store.originalIconURL(app), fallback: "questionmark") }
             Image(systemName: "arrow.right").foregroundStyle(.secondary)
-            iconTile("Custom", image: store.libraryIconImage(app.customIconID), fallback: "photo")
+            iconTile("Custom") { thumbnail(store.libraryIconURL(app.customIconID), fallback: "photo") }
             Image(systemName: "equal").foregroundStyle(.secondary)
-            iconTile("On Disk Now", image: iconOnDisk, fallback: iconOnDiskLoaded ? "app.dashed" : "ellipsis")
+            iconTile("On Disk Now") {
+                // Live, so it follows reapplies and restores while the sheet is open.
+                WorkspaceIcon(path: app.bundlePath, size: 76,
+                              refreshKey: IconRefreshKey(status: status, lastApplied: app.lastAppliedDate))
+            }
         }
         .frame(maxWidth: .infinity)
     }
 
-    private func iconTile(_ title: String, image: NSImage?, fallback: String) -> some View {
+    private func thumbnail(_ url: URL?, fallback: String) -> some View {
+        IconThumbnail(url: url, size: 76) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.quaternary)
+                .overlay(Image(systemName: fallback).foregroundStyle(.secondary))
+        }
+    }
+
+    private func iconTile<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 8) {
-            Group {
-                if let image {
-                    Image(nsImage: image).resizable().interpolation(.high)
-                } else {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.quaternary)
-                        .overlay(Image(systemName: fallback).foregroundStyle(.secondary))
-                }
-            }
-            .frame(width: 76, height: 76)
+            content()
             Text(title).font(.caption).foregroundStyle(.secondary)
         }
     }

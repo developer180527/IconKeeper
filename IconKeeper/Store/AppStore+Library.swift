@@ -2,7 +2,7 @@
 //  AppStore+Library.swift
 //  IconKeeper
 //
-//  The icon library, cached images, and keeping the data folder tidy.
+//  The icon library, icon file locations for the UI, and keeping the data folder tidy.
 //
 
 import AppKit
@@ -87,7 +87,6 @@ extension AppStore {
               !apps.contains(where: { $0.customIconID == iconID }) else { return }
         let filename = library[index].filename
         library.remove(at: index)
-        if let url = persistence.libraryFileURL(for: filename) { imageCache.removeObject(forKey: url.path as NSString) }
         let persistence = self.persistence
         Task.detached(priority: .utility) { persistence.removeLibraryIcon(filename: filename) }
         persist()
@@ -113,42 +112,21 @@ extension AppStore {
         }
     }
 
-    // MARK: - Images (cached)
+    // MARK: - Icon files for the UI
+    //
+    // The store hands out file locations only. Decoding (off the main thread,
+    // at display size) belongs to the view layer: see `IconThumbnails`.
 
-    func libraryIconImage(_ iconID: UUID?) -> NSImage? {
-        guard let item = libraryItem(iconID) else { return nil }
-        return libraryIconImage(for: item)
+    func libraryIconURL(_ iconID: UUID?) -> URL? {
+        libraryItem(iconID).flatMap { persistence.libraryFileURL(for: $0.filename) }
     }
 
-    func libraryIconImage(for item: IconLibraryItem) -> NSImage? {
-        persistence.libraryFileURL(for: item.filename).flatMap(cachedImage(at:))
+    func libraryIconURL(for item: IconLibraryItem) -> URL? {
+        persistence.libraryFileURL(for: item.filename)
     }
 
-    func originalIconImage(_ app: ProtectedApp) -> NSImage? {
-        app.originalIconBackupFilename.flatMap { persistence.backups.url(for: $0) }.flatMap(cachedImage(at:))
-    }
-
-    /// The icon Finder shows for the item right now, read off the main thread.
-    func currentIcon(of app: ProtectedApp) async -> NSImage? {
-        let path = app.bundlePath
-        return await Task.detached(priority: .userInitiated) { () -> NSImage? in
-            guard FileManager.default.fileExists(atPath: path) else { return nil }
-            return IconManager.captureCurrentIcon(of: URL(fileURLWithPath: path))
-        }.value
-    }
-
-    private func cachedImage(at url: URL) -> NSImage? {
-        let key = url.path as NSString
-        if let cached = imageCache.object(forKey: key) { return cached }
-        guard let image = NSImage(contentsOf: url) else { return nil }
-        imageCache.setObject(image, forKey: key, cost: Self.decodedCost(of: image))
-        return image
-    }
-
-    /// Roughly what the largest representation costs once decoded.
-    private static func decodedCost(of image: NSImage) -> Int {
-        let pixels = image.representations.map { $0.pixelsWide * $0.pixelsHigh }.max() ?? 0
-        return max(pixels, 64 * 64) * 4
+    func originalIconURL(_ app: ProtectedApp) -> URL? {
+        app.originalIconBackupFilename.flatMap { persistence.backups.url(for: $0) }
     }
 
     // MARK: - Maintenance
