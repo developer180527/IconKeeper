@@ -75,6 +75,13 @@ extension AppStore {
         return ActivityFilter.entries(itemID: id, name: entry.name, nameIsUnique: nameIsUnique, in: activity, limit: limit)
     }
 
+    // MARK: Settings
+
+    /// Where IconKeeper keeps its data, abbreviated for display.
+    var dataFolderDisplayPath: String {
+        (persistence.rootURL.path as NSString).abbreviatingWithTildeInPath
+    }
+
     // MARK: Developer Mode
 
     /// The items furthest from their recorded render, worst first.

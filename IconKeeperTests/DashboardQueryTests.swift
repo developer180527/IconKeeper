@@ -115,3 +115,62 @@ struct LibraryQueryTests {
         #expect(query.run(on: [a, b, c], usage: usage).visible.map(\.name) == ["Sunset"])
     }
 }
+
+@Suite("Activity log")
+struct ActivityLogTests {
+    private let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }()
+
+    private func at(_ day: Int, _ hour: Int) -> Date {
+        calendar.date(from: DateComponents(year: 2026, month: 9, day: day, hour: hour))!
+    }
+
+    @Test("Groups by day, newest first, and collapses repeats within a day")
+    func grouping() {
+        let safari = UUID()
+        let entries = [
+            ActivityEntry(date: at(17, 14), kind: .failed, itemID: safari, appName: "Safari", message: "Can't write"),
+            ActivityEntry(date: at(17, 12), kind: .failed, itemID: safari, appName: "Safari", message: "Can't write"),
+            ActivityEntry(date: at(17, 9), kind: .failed, itemID: safari, appName: "Safari", message: "Can't write"),
+            ActivityEntry(date: at(17, 8), kind: .reapplied, itemID: UUID(), appName: "Notes", message: "Put back"),
+            ActivityEntry(date: at(16, 20), kind: .failed, itemID: safari, appName: "Safari", message: "Can't write"),
+        ]
+        let days = ActivityLog.days(from: entries, filter: .all, search: "", calendar: calendar)
+        #expect(days.count == 2)
+        #expect(days[0].rows.map(\.count) == [3, 1])
+        #expect(days[0].rows[0].firstDate == at(17, 9))
+        #expect(days[0].eventCount == 4)
+        // The same event on another day starts a new row.
+        #expect(days[1].rows.map(\.count) == [1])
+    }
+
+    @Test("Repeats separated by a different event stay separate")
+    func interruptedRuns() {
+        let id = UUID()
+        let entries = [
+            ActivityEntry(date: at(17, 3), kind: .drifted, itemID: id, appName: "A", message: "reset"),
+            ActivityEntry(date: at(17, 2), kind: .reapplied, itemID: id, appName: "A", message: "back"),
+            ActivityEntry(date: at(17, 1), kind: .drifted, itemID: id, appName: "A", message: "reset"),
+        ]
+        #expect(ActivityLog.days(from: entries, filter: .all, search: "", calendar: calendar)[0].rows.count == 3)
+    }
+
+    @Test("Filters and search")
+    func filtering() {
+        let entries = [
+            ActivityEntry(date: at(17, 3), kind: .failed, appName: "Safari", message: "Can't write"),
+            ActivityEntry(date: at(17, 2), kind: .reapplied, appName: "Notes", message: "Put back"),
+            ActivityEntry(date: at(17, 1), kind: .added, appName: "Photos", message: "Added"),
+        ]
+        func names(_ filter: ActivityLog.Filter, _ search: String = "") -> [String] {
+            ActivityLog.days(from: entries, filter: filter, search: search, calendar: calendar).flatMap(\.rows).map(\.entry.appName)
+        }
+        #expect(names(.problems) == ["Safari"])
+        #expect(names(.restores) == ["Notes"])
+        #expect(names(.changes) == ["Photos"])
+        #expect(names(.all, "put") == ["Notes"])
+    }
+}

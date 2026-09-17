@@ -44,10 +44,10 @@ struct IconKeeperApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(layout: .tabs)
                 .windowErrorAlert()
                 .environment(store)
-                .frame(width: 480, height: 560)
+                .frame(width: 560, height: 540)
         }
 
         MenuBarExtra {
