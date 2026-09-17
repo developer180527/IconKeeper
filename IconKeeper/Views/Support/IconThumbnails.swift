@@ -98,9 +98,9 @@ struct IconThumbnail<Placeholder: View>: View {
 
     var body: some View {
         // A cache hit renders in this pass, so scrolling back never flashes.
-        let image = url.flatMap { url in
-            loaded?.url == url ? loaded?.image : IconThumbnails.shared.cached(url, pixels: pixels)
-        }
+        // While a new size loads, the previous image keeps showing (scaled).
+        let exact = url.flatMap { IconThumbnails.shared.cached($0, pixels: pixels) }
+        let image = exact ?? (loaded?.url == url ? loaded?.image : nil)
         Group {
             if let image {
                 Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
@@ -109,13 +109,18 @@ struct IconThumbnail<Placeholder: View>: View {
             }
         }
         .frame(width: size, height: size)
-        .task(id: url) {
-            guard let url, image == nil else { return }
+        .task(id: LoadKey(url: url, pixels: pixels)) {
+            guard let url, exact == nil else { return }
             if let fresh = await IconThumbnails.shared.load(url, pixels: pixels), !Task.isCancelled {
                 loaded = (url, fresh)
             }
         }
     }
+}
+
+private struct LoadKey: Equatable {
+    let url: URL?
+    let pixels: Int
 }
 
 /// The icon Finder currently shows for a path, loaded off the main thread.

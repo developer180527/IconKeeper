@@ -31,19 +31,10 @@ struct AddAppView: View {
     /// an app's Info.plist is disk I/O); icons load through `WorkspaceIcon` and
     /// `IconThumbnail`. The body re-runs on every batch progress tick, so it
     /// must never do that work itself.
-    private struct ItemPreview: Identifiable, Sendable {
-        let id: URL
-        let name: String
-    }
-    @State private var itemPreviews: [ItemPreview] = []
+    @State private var itemPreviews: [ItemPreviewInfo] = []
 
     private func loadItemPreviews() async {
-        let urls = Array(itemURLs.prefix(4))
-        let previews = await Task.detached(priority: .userInitiated) {
-            urls.map { url in
-                ItemPreview(id: url, name: IconManager.displayName(of: url, kind: IconManager.classify(url) ?? .app))
-            }
-        }.value
+        let previews = await store.previewInfo(for: Array(itemURLs.prefix(4)))
         if !Task.isCancelled { itemPreviews = previews }
     }
 
@@ -130,7 +121,7 @@ struct AddAppView: View {
     private var appCard: some View {
         // Apps and folders are both directories; regular files are rejected
         // because macOS discards their custom icon on every save.
-        DropZone(accepts: { IconManager.classify($0) != nil }) { urls in
+        DropZone(filter: store.protectableItems(in:)) { urls in
             itemURLs = urls
         } content: { targeted in
             cardChrome(targeted: targeted, filled: !itemURLs.isEmpty) {

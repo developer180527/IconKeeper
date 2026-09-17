@@ -33,6 +33,8 @@ struct ActivityTests {
         #expect(appEntries.map(\.message) == ["app"])
         let folderEntries = ActivityFilter.entries(for: folder, in: activity, allItems: [app, folder])
         #expect(folderEntries.map(\.message) == ["folder"])
+        let limited = ActivityFilter.entries(itemID: app.id, name: app.displayName, nameIsUnique: true, in: activity + activity, limit: 1)
+        #expect(limited.count == 1)
     }
 
     @Test("Legacy entries are attributed by name only when the name is unique")

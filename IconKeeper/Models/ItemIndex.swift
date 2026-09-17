@@ -28,9 +28,17 @@ nonisolated struct ItemIndexEntry: Identifiable, Equatable, Sendable {
     let health: HealthLevel?
     let dateAdded: Date
     let lastApplied: Date?
+    // Detail-sheet fields, so no view ever needs the raw model.
+    let bundleIdentifier: String?
+    let reapplyCount: Int
+    /// The assigned library icon's name.
+    let iconName: String?
+    /// The backed-up original icon's file, if one was captured.
+    let originalIconURL: URL?
 
     init(id: UUID, kind: ItemKind, name: String, path: String, iconID: UUID?, iconURL: URL? = nil, isProtectionEnabled: Bool,
-         status: AppStatus, health: HealthLevel?, dateAdded: Date = .distantPast, lastApplied: Date? = nil) {
+         status: AppStatus, health: HealthLevel?, dateAdded: Date = .distantPast, lastApplied: Date? = nil,
+         bundleIdentifier: String? = nil, reapplyCount: Int = 0, iconName: String? = nil, originalIconURL: URL? = nil) {
         self.id = id
         self.kind = kind
         self.name = name
@@ -42,6 +50,10 @@ nonisolated struct ItemIndexEntry: Identifiable, Equatable, Sendable {
         self.health = health
         self.dateAdded = dateAdded
         self.lastApplied = lastApplied
+        self.bundleIdentifier = bundleIdentifier
+        self.reapplyCount = reapplyCount
+        self.iconName = iconName
+        self.originalIconURL = originalIconURL
     }
 
     /// Health that's worth pointing out on an otherwise fine item.

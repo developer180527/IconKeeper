@@ -159,6 +159,7 @@ final class AppStore {
     /// to invalidate it; a miss or mismatch rebuilds it.
     @ObservationIgnored private var positionByID: [UUID: Int] = [:]
     @ObservationIgnored private var indexRebuildScheduled = false
+    @ObservationIgnored private var entryPositions: [UUID: Int] = [:]
 
     // MARK: - Lifecycle
 
@@ -282,9 +283,12 @@ final class AppStore {
                          hasIcon: app.customIconID != nil)
     }
 
-    /// The published row for an item — what views should read.
+    /// The published row for an item — what views should read. O(1).
     func entry(for id: UUID) -> ItemIndexEntry? {
-        index.first { $0.id == id }
+        guard let position = entryPositions[id], position < index.count, index[position].id == id else {
+            return index.first { $0.id == id }
+        }
+        return index[position]
     }
 
     /// The last health report the engine produced. Never does work.
@@ -449,17 +453,23 @@ final class AppStore {
         indexRebuildScheduled = false
         var entries: [ItemIndexEntry] = []
         entries.reserveCapacity(apps.count)
-        var iconURLs: [UUID: URL] = [:]
-        for item in library { iconURLs[item.id] = persistence.libraryFileURL(for: item.filename) }
+        var icons: [UUID: (url: URL?, name: String)] = [:]
+        for item in library { icons[item.id] = (persistence.libraryFileURL(for: item.filename), item.name) }
+        var positions: [UUID: Int] = [:]
+        positions.reserveCapacity(apps.count)
         var next = StoreSummary()
         for app in apps {
             let entry = ItemIndexEntry(
                 id: app.id, kind: app.kind, name: app.displayName, path: app.bundlePath,
-                iconID: app.customIconID, iconURL: app.customIconID.flatMap { iconURLs[$0] },
+                iconID: app.customIconID, iconURL: app.customIconID.flatMap { icons[$0]?.url },
                 isProtectionEnabled: app.isProtectionEnabled,
                 status: status(for: app), health: healthByID[app.id]?.overall,
-                dateAdded: app.dateAdded, lastApplied: app.lastAppliedDate
+                dateAdded: app.dateAdded, lastApplied: app.lastAppliedDate,
+                bundleIdentifier: app.bundleIdentifier, reapplyCount: app.reapplyCount,
+                iconName: app.customIconID.flatMap { icons[$0]?.name },
+                originalIconURL: app.originalIconBackupFilename.flatMap { persistence.backups.url(for: $0) }
             )
+            positions[app.id] = entries.count
             entries.append(entry)
             next.total += 1
             if app.kind == .app { next.apps += 1 } else { next.folders += 1 }
@@ -469,6 +479,7 @@ final class AppStore {
         }
         // Assign only on change: an equal write still invalidates every reader.
         if entries != index { index = entries }
+        entryPositions = positions
         if next != summary { summary = next }
     }
 }

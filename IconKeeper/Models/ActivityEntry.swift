@@ -63,11 +63,20 @@ nonisolated enum ActivityFilter {
     /// Entries are matched by item id. Entries from before ids were recorded
     /// only have a name, so they're attributed by name — but only when no other
     /// item shares that name, since otherwise there's no telling whose they are.
+    static func entries(itemID: UUID, name: String, nameIsUnique: Bool, in activity: [ActivityEntry], limit: Int = .max) -> [ActivityEntry] {
+        var result: [ActivityEntry] = []
+        for entry in activity {
+            let matches = entry.itemID.map { $0 == itemID } ?? (nameIsUnique && entry.appName == name)
+            if matches {
+                result.append(entry)
+                if result.count == limit { break }
+            }
+        }
+        return result
+    }
+
     static func entries(for item: ProtectedApp, in activity: [ActivityEntry], allItems: [ProtectedApp]) -> [ActivityEntry] {
         let nameIsUnique = allItems.lazy.filter { $0.displayName == item.displayName }.count <= 1
-        return activity.filter { entry in
-            if let itemID = entry.itemID { return itemID == item.id }
-            return nameIsUnique && entry.appName == item.displayName
-        }
+        return entries(itemID: item.id, name: item.displayName, nameIsUnique: nameIsUnique, in: activity)
     }
 }

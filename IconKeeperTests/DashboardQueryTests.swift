@@ -89,3 +89,29 @@ struct DashboardQueryTests {
         #expect(query.sort == .recentlyAdded)
     }
 }
+
+@Suite("Library filtering")
+struct LibraryQueryTests {
+    private let base = Date(timeIntervalSince1970: 0)
+
+    @Test("Usage filter, search and sorts")
+    func libraryQuery() {
+        let a = IconLibraryItem(name: "Mint", filename: "a.icns", dateAdded: base + 10)
+        let b = IconLibraryItem(name: "blueprint", filename: "b.icns", dateAdded: base + 30)
+        let c = IconLibraryItem(name: "Sunset", filename: "c.icns", dateAdded: base + 20)
+        let usage = [a.id: 1, b.id: 4]
+        var query = LibraryQuery()
+        let all = query.run(on: [a, b, c], usage: usage)
+        #expect(all.visible.map(\.name) == ["blueprint", "Sunset", "Mint"])
+        #expect(all.counts == [.all: 3, .inUse: 2, .unused: 1])
+
+        query.usage = .unused
+        #expect(query.run(on: [a, b, c], usage: usage).visible.map(\.name) == ["Sunset"])
+        query.usage = .all
+        query.sort = .mostUsed
+        #expect(query.run(on: [a, b, c], usage: usage).visible.map(\.name) == ["blueprint", "Mint", "Sunset"])
+        query.sort = .name
+        query.search = "  S "
+        #expect(query.run(on: [a, b, c], usage: usage).visible.map(\.name) == ["Sunset"])
+    }
+}

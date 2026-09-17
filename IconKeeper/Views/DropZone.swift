@@ -9,32 +9,31 @@
 import SwiftUI
 
 struct DropZone<Content: View>: View {
-    /// Decides whether a dropped URL is acceptable. A predicate rather than a
-    /// set of extensions, because folders are identified by being directories
-    /// rather than by any extension.
-    var accepts: (URL) -> Bool
+    /// Narrows dropped URLs to the acceptable ones. Async, so checks that need
+    /// the disk (is this a folder?) run off the main thread.
+    var filter: @MainActor ([URL]) async -> [URL]
     var onDrop: ([URL]) -> Void
     @ViewBuilder var content: (_ isTargeted: Bool) -> Content
 
     @State private var isTargeted = false
 
-    /// Convenience for the common "match these file extensions" case.
+    /// Accepts files with these extensions — a string check, no disk access.
     init(
         allowedExtensions: Set<String>,
         onDrop: @escaping ([URL]) -> Void,
         @ViewBuilder content: @escaping (_ isTargeted: Bool) -> Content
     ) {
-        self.accepts = { allowedExtensions.contains($0.pathExtension.lowercased()) }
+        self.filter = { urls in urls.filter { allowedExtensions.contains($0.pathExtension.lowercased()) } }
         self.onDrop = onDrop
         self.content = content
     }
 
     init(
-        accepts: @escaping (URL) -> Bool,
+        filter: @escaping @MainActor ([URL]) async -> [URL],
         onDrop: @escaping ([URL]) -> Void,
         @ViewBuilder content: @escaping (_ isTargeted: Bool) -> Content
     ) {
-        self.accepts = accepts
+        self.filter = filter
         self.onDrop = onDrop
         self.content = content
     }
@@ -42,9 +41,12 @@ struct DropZone<Content: View>: View {
     var body: some View {
         content(isTargeted)
             .dropDestination(for: URL.self) { urls, _ in
-                let matches = urls.filter(accepts)
-                guard !matches.isEmpty else { return false }
-                onDrop(matches)
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                Task {
+                    let matches = await filter(files)
+                    if !matches.isEmpty { onDrop(matches) }
+                }
                 return true
             } isTargeted: { isTargeted = $0 }
     }

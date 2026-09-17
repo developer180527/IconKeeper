@@ -58,9 +58,14 @@ struct DashboardView: View {
         }
         // Drop apps/folders anywhere on the dashboard to jump straight into Add.
         .dropDestination(for: URL.self) { urls, _ in
-            let items = urls.filter { IconManager.classify($0) != nil }
-            guard let first = items.first else { return false }
-            addSheet = AddSheet(appURL: first, extraURLs: Array(items.dropFirst()))
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty else { return false }
+            Task {
+                // Classified off the main thread; non-folders are ignored.
+                let items = await store.protectableItems(in: files)
+                guard let first = items.first else { return }
+                addSheet = AddSheet(appURL: first, extraURLs: Array(items.dropFirst()))
+            }
             return true
         }
         .onAppear { query.sort = DashboardQuery.Sort(rawValue: sortRaw) ?? .attentionFirst }
@@ -440,8 +445,10 @@ private struct EmptyDashboard: View {
     var onDropItems: ([URL]) -> Void
     var onImport: () -> Void
 
+    @Environment(AppStore.self) private var store
+
     var body: some View {
-        DropZone(accepts: { IconManager.classify($0) != nil }) { urls in
+        DropZone(filter: store.protectableItems(in:)) { urls in
             onDropItems(urls)
         } content: { targeted in
             VStack(spacing: 22) {

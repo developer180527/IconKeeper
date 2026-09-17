@@ -17,14 +17,8 @@ struct DeveloperView: View {
     /// Items whose current icon is far from the reference we recorded when we
     /// applied it. A healthy item sits near 0; anything over the threshold is
     /// what drives a reapply, so a list of these explains any reapply storm.
-    private var suspicious: [(app: ProtectedApp, score: Double)] {
-        store.apps.compactMap { app in
-            guard let score = store.lastDriftScore[app.id] else { return nil }
-            return (app, score)
-        }
-        .sorted { $0.score > $1.score }
-        .prefix(12)
-        .map { $0 }
+    private var suspicious: [DriftScoreRow] {
+        store.driftScores(limit: 12)
     }
 
     var body: some View {
@@ -97,14 +91,14 @@ struct DeveloperView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(suspicious, id: \.app.id) { entry in
+                    ForEach(suspicious) { entry in
                         HStack {
-                            Image(systemName: entry.app.kind.symbolName)
+                            Image(systemName: entry.entry.kind.symbolName)
                                 .foregroundStyle(.secondary)
                                 .frame(width: 16)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(entry.app.displayName).font(.callout)
-                                Text(entry.app.kind.label)
+                                Text(entry.entry.name).font(.callout)
+                                Text(entry.entry.kind.label)
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -137,13 +131,7 @@ struct DeveloperView: View {
     /// Everything Developer Mode shows, as JSON — copyable or exportable so a
     /// misbehaving install can be captured rather than described.
     private var statsJSON: String {
-        Diagnostics.statsJSON(
-            stats: store.stats,
-            apps: store.apps,
-            driftScores: store.lastDriftScore,
-            loopGuarded: Set(store.runtime.filter { $0.value.loopGuarded }.keys),
-            libraryCount: store.library.count
-        )
+        store.diagnosticsJSON()
     }
 
     private func metric(_ label: String, _ value: String) -> some View {

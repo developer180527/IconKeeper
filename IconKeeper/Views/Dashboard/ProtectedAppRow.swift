@@ -89,6 +89,7 @@ struct ProtectedAppRow: View, Equatable {
         .contextMenu { menuContents }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(entry.name), \(entry.kind.label), \(entry.status.label)")
+        .accessibilityAction(named: "Show Details", onSelect)
     }
 
     private var attentionColor: Color {

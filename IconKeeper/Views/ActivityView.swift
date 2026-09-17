@@ -45,11 +45,11 @@ struct ActivityView: View {
             ToolbarItemGroup {
                 Menu {
                     Button("Copy as JSON", systemImage: "doc.on.doc") {
-                        Diagnostics.copyToPasteboard(Diagnostics.activityJSON(store.activity))
+                        Diagnostics.copyToPasteboard(store.activityJSON())
                     }
                     Button("Export as JSON…", systemImage: "square.and.arrow.up") {
                         Diagnostics.exportToFile(
-                            Diagnostics.activityJSON(store.activity),
+                            store.activityJSON(),
                             defaultName: "IconKeeper Activity.json")
                     }
                 } label: {
